@@ -39,7 +39,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p out
-          cp release/*.exe release/*.zip out/
+          find release -maxdepth 1 \( -name '*.exe' -o -name '*.zip' \) -exec cp {} out/ \;
           ls -lh out/
 
       - name: Create Release
