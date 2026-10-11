@@ -9,8 +9,31 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: ubuntu-latest
+  # ---------- 桌面端（Electron）：Win / Linux / Mac 并行 ----------
+  build-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: win
+            builder: --win --x64
+            globs: |
+              release/*.exe
+              release/*.zip
+          - os: ubuntu-latest
+            name: linux
+            builder: --linux AppImage deb
+            globs: |
+              release/*.AppImage
+              release/*.deb
+          - os: macos-latest
+            name: mac
+            builder: --mac --universal
+            globs: |
+              release/*.dmg
+              release/*.zip
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,24 +45,103 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck & build (electron mode)
-        run: npm run build:web
-
-      - name: Package Windows
+      - name: Set version
         run: |
-          # 版本号只用于产物命名（electron-builder 从 package.json 读取，runner 上临时修改即可）
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             npm pkg set version="${GITHUB_REF_NAME#v}"
           else
             BASE="$(node -p "require('./package.json').version")"
             npm pkg set version="${BASE}-${GITHUB_RUN_NUMBER}"
           fi
-          npx electron-builder --win --x64 --publish never
+          node -p "console.log('packaging version:', require('./package.json').version)"
+
+      - name: Typecheck & build
+        run: npm run build:web
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.builder }} --publish never
+        env:
+          # Mac 未配置 Apple 开发者证书：禁用自动签名发现，产物为未签名（首启需右键打开）
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.globs }}
+          if-no-files-found: warn
+
+  # ---------- Android（Capacitor 6 + Gradle）----------
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set version
+        run: |
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            npm pkg set version="${GITHUB_REF_NAME#v}"
+          else
+            BASE="$(node -p "require('./package.json').version")"
+            npm pkg set version="${BASE}-${GITHUB_RUN_NUMBER}"
+          fi
+          VER="$(node -p "require('./package.json').version")"
+          CODE="${GITHUB_RUN_NUMBER}"
+          sed -i "s/^        versionCode .*/        versionCode $CODE/" android/app/build.gradle
+          sed -i "s/^        versionName .*/        versionName \"$VER\"/" android/app/build.gradle
+          node -p "console.log('packaging version:', require('./package.json').version)"
+
+      - name: Build web
+        run: npm run build:web
+
+      - name: Sync & build APK/AAB
+        run: |
+          npx cap sync android
+          cd android
+          ./gradlew assembleRelease bundleRelease --no-daemon
 
       - name: Collect artifacts
         run: |
+          VER="$(node -p "require('./package.json').version")"
           mkdir -p out
-          find release -maxdepth 1 \( -name '*.exe' -o -name '*.zip' \) -exec cp {} out/ \;
+          cp android/app/build/outputs/apk/release/app-release.apk "out/ZawaZawa-Android-$VER.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "out/ZawaZawa-Android-$VER.aab"
+          ls -lh out/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/
+          if-no-files-found: error
+
+  # ---------- 聚合发布：tag → 正式 release；无 tag → dev 预发布 ----------
+  release:
+    needs: [build-desktop, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten
+        run: |
+          mkdir -p out
+          find artifacts -type f -exec cp {} out/ \;
           ls -lh out/
 
       - name: Create Release
@@ -53,11 +155,18 @@ jobs:
           body: |
             ${{ startsWith(github.ref, 'refs/tags/') && '## 正式版本' || '## 预发布（main 每次推送自动覆盖）' }}
 
+            | 平台 | 产物 |
+            |---|---|
+            | Windows | portable exe（免安装） |
+            | macOS | dmg / zip（Universal，未签名首启右键打开） |
+            | Linux | AppImage / deb |
+            | Android | APK（直接安装）/ AAB |
+
             - Commit: `${{ github.sha }}`
             - 触发: ${{ github.ref_name }}
             - 构建: [Actions #${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
-            运行 portable exe 即可使用，无需安装。
+            > Android 当前使用 debug 签名（可安装测试，不可上架 Play）；iOS 需 Apple 开发者账号另行配置。
           files: out/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

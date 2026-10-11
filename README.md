@@ -1,6 +1,18 @@
 # ZawaZawa 全平台客户端
 
-ZawaZawa（zawa.uk）的 Web / 桌面客户端。React 19 + TypeScript + Vite 7，桌面端基于 Electron 33，与官方站点同后端（`www.zawa.uk` API）。
+ZawaZawa（zawa.uk）的全平台客户端。React 19 + TypeScript + Vite，桌面端基于 Electron，移动端基于 Capacitor，与官方站点同后端（`www.zawa.uk` API）。
+
+## 发布平台（GitHub Actions 自动构建）
+
+| 平台 | 产物 | 说明 |
+|---|---|---|
+| Windows | portable exe | 免安装直接运行 |
+| macOS | dmg / zip（Universal） | 未签名，首启右键→打开 |
+| Linux | AppImage / deb | |
+| Android | APK / AAB | 当前 debug 签名（可安装，不可上架 Play） |
+| iOS | — | 需 Apple 开发者账号 + 证书/描述文件，暂未接入 |
+
+推 `main` → 更新 `dev` 预发布；打 `v*.*.*` tag → 正式 release（版本号跟随 tag）。
 
 ## 功能
 
@@ -18,12 +30,17 @@ ZawaZawa（zawa.uk）的 Web / 桌面客户端。React 19 + TypeScript + Vite 7�
 ```bash
 npm install
 
-# Web 构建（产物 dist/，可部署到任意静态托管）
-node node_modules/vite/bin/vite.js build
+# 桌面端（electron 模式，VITE_API_BASE 来自 .env.electron）
+npm run build:web
+npx electron-builder --win --x64      # Windows portable
+npx electron-builder --linux AppImage deb   # Linux
+npx electron-builder --mac            # macOS（未签名需 CSC_IDENTITY_AUTO_DISCOVERY=false）
 
-# Electron 构建 + 打包 Windows 便携版
-node node_modules/vite/bin/vite.js build --mode electron   # 需先有 .env.electron（VITE_API_BASE）
-node node_modules/electron-builder/cli.js --win --x64       # 产物 release/ZawaZawa-Windows-1.0.0-portable.exe
+# Android
+npm run build:web
+npx cap sync android
+cd android && ./gradlew assembleRelease bundleRelease
+# 产物: android/app/build/outputs/apk/release/app-release.apk, outputs/bundle/release/app-release.aab
 ```
 
 > 国内网络构建 Electron 时需配置镜像：

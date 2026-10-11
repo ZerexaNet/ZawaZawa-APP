@@ -1,7 +1,7 @@
 {
   "name": "zawazawa-client",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "electron/main.cjs",
   "description": "ZawaZawa 全平台视频客户端",
@@ -16,6 +16,8 @@
     "dist:win": "npm run build:web && electron-builder --win --x64"
   },
   "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/core": "^6.2.2",
     "dompurify": "^3.4.16",
     "marked": "^18.1.0",
     "react": "^19.2.8",
@@ -24,6 +26,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.2.2",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
@@ -51,7 +54,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",
@@ -68,6 +73,25 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ZawaZawa",
       "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon-512.png",
+      "category": "Video",
+      "maintainer": "ZawaZawa <hekuo5310@gmail.com>",
+      "artifactName": "${productName}-Linux-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon-512.png",
+      "category": "public.app-category.video",
+      "artifactName": "${productName}-Mac-${version}-${arch}.${ext}"
     }
   }
 }
