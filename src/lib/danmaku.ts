@@ -1,203 +1,215 @@
-// Canvas 弹幕引擎 —— 由 Player 的 rAF 循环驱动
-export interface DanmakuItem {
-  id: string;
-  text: string;
-  timeSec: number;
-  color?: string;
-  mode?: string; // scroll | top | bottom
-  fontsize?: number;
-}
+// 轻量 canvas 弹幕引擎：对象池 + 行槽位 + rAF 驱动，性能优先。
+import type { Danmaku } from './types';
 
-interface ActiveItem {
-  text: string;
+export interface DmItem {
+  id: number;
+  content: string;
+  time: number;        // 秒
   color: string;
+  mode: 'scroll' | 'top' | 'bottom';
   size: number;
+  // 运行时
   x: number;
-  y: number;
-  speed: number;
   w: number;
-  kind: 'scroll' | 'top' | 'bottom';
-  born: number;      // 视频时间点（用于点击跳转）
-  spawnAt: number;   // performance.now 出生时间（top/bottom 定时消失）
+  h: number;
+  y: number;
+  lane: number;
+  entered: boolean;
+  done: boolean;
+  speed: number;
 }
 
-const LANE_HEIGHT = 42;
-const TOP_SHOW_MS = 5000;
+const TOP_LANES = 4;
+const BOT_LANES = 4;
 
 export class DanmakuEngine {
-  private ctx: CanvasRenderingContext2D;
-  private width = 640;
-  private height = 360;
-  private items: DanmakuItem[] = [];
-  private itemIndex = 0; // 游标：items[0..itemIndex) 已在时间上处理过
-  private active: ActiveItem[] = [];
-  private lanes: { y: number; bottomEdge: number }[] = [];
-  private topRow = 0;
-  private bottomRow = 0;
-  private hitBoxes: { x: number; y: number; w: number; h: number; sec: number }[] = [];
-  onSeek?: (sec: number) => void;
-  visible = true;
-  opacity = 0.9;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  W = 0; H = 0; dpr = 1;
+  items: DmItem[] = [];
+  pool: DmItem[] = [];
+  laneFreeTop: number[] = [];
+  laneFreeBot: number[] = [];
+  paused = false;
+  opacity = 0.92;
+  showScroll = true;
+  showTop = true;
+  showBot = true;
+  maxOnScreen = 120;
+  private raf = 0;
+  private last = 0;
+  private seq = 0;
+  current = 0;
+  onSeek?: (t: number) => void;
+  fontBase = 22;
 
-  private canvas: HTMLCanvasElement;
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
-    this.canvas.addEventListener('click', this.handleClick);
-    this.resize();
+    this.laneFreeTop = Array(TOP_LANES).fill(Infinity);
+    this.laneFreeBot = Array(BOT_LANES).fill(Infinity);
+    canvas.addEventListener('click', this.onClick);
+  }
+
+  destroy() {
+    cancelAnimationFrame(this.raf);
+    this.canvas.removeEventListener('click', this.onClick);
+    this.items = [];
+    this.pool = [];
+  }
+
+  load(list: Danmaku[], startAt = 0) {
+    this.clear();
+    for (const d of list) this.add(d, true);
+    this.current = startAt;
   }
 
   resize() {
-    const rect = this.canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.width = Math.max(200, rect.width);
-    this.height = Math.max(150, rect.height);
-    this.canvas.width = Math.round(this.width * dpr);
-    this.canvas.height = Math.round(this.height * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.initLanes();
-  }
-
-  private initLanes() {
-    this.lanes = [];
-    for (let y = LANE_HEIGHT + 8; y < this.height - 10; y += LANE_HEIGHT) {
-      this.lanes.push({ y, bottomEdge: this.width });
-    }
-    if (!this.lanes.length) this.lanes.push({ y: 30, bottomEdge: 0 });
-  }
-
-  load(items: DanmakuItem[], currentTime = 0) {
-    this.items = [...items].sort((a, b) => a.timeSec - b.timeSec);
-    this.active = [];
-    this.initLanes();
-    // seek 到 currentTime：把过去 8 秒的弹幕按年龄生成
-    this.itemIndex = 0;
-    for (let i = 0; i < this.items.length && this.items[i].timeSec <= currentTime; i++) {
-      const it = this.items[i];
-      const age = currentTime - it.timeSec;
-      if (age < 9) this.spawn(it, age);
-    }
-    this.itemIndex = this.items.findIndex((it) => it.timeSec > currentTime);
-    if (this.itemIndex < 0) this.itemIndex = this.items.length;
-  }
-
-  add(item: DanmakuItem, currentTime?: number) {
-    this.items.push(item);
-    this.items.sort((a, b) => a.timeSec - b.timeSec);
-    if (currentTime !== undefined && Math.abs(item.timeSec - currentTime) < 0.6) {
-      this.spawn(item, 0);
-    }
+    const r = this.canvas.getBoundingClientRect();
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.W = r.width;
+    this.H = r.height;
+    this.canvas.width = Math.round(r.width * this.dpr);
+    this.canvas.height = Math.round(r.height * this.dpr);
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
   clear() {
-    this.active = [];
-    this.initLanes();
-    this.hitBoxes = [];
+    this.items = [];
+    for (const it of this.pool) this.free(it);
+    this.laneFreeTop = Array(TOP_LANES).fill(Infinity);
+    this.laneFreeBot = Array(BOT_LANES).fill(Infinity);
+    this.ctx.clearRect(0, 0, this.W, this.H);
   }
 
-  private spawn(it: DanmakuItem, ageSec: number) {
-    const size = Math.min(30, Math.max(16, it.fontsize || 25));
-    this.ctx.font = `bold ${size}px "PingFang SC","Microsoft YaHei",sans-serif`;
-    const w = this.ctx.measureText(it.text).width + 10;
-    const kind: ActiveItem['kind'] = it.mode === 'top' ? 'top' : it.mode === 'bottom' ? 'bottom' : 'scroll';
-    let x: number, y: number, speed: number;
-    if (kind === 'scroll') {
-      speed = (this.width + 40) / 4.2;
-      x = this.width + 20 - ageSec * speed;
-      let lane = this.lanes[0];
-      for (const l of this.lanes) if (l.bottomEdge <= 0) { lane = l; break; }
-      if (ageSec >= 0) lane.bottomEdge = Math.min(lane.bottomEdge, x - w - 8);
-      y = lane.y;
+  private free(it: DmItem) {
+    it.x = 0; it.w = 0; it.y = 0; it.lane = 0; it.entered = false; it.done = false; it.speed = 0;
+    this.pool.push(it);
+  }
+
+  add(d: Danmaku, silent = false) {
+    const mode: DmItem['mode'] = d.mode === 'top' ? 'top' : d.mode === 'bottom' ? 'bottom' : 'scroll';
+    if (mode === 'scroll' && !this.showScroll) return;
+    if (mode === 'top' && !this.showTop) return;
+    if (mode === 'bottom' && !this.showBot) return;
+    let it = this.pool.pop();
+    if (!it) it = {} as DmItem;
+    it.id = ++this.seq;
+    it.content = (d.content || '').slice(0, 80);
+    it.time = Number(d.time_sec ?? d.time ?? 0);
+    it.color = d.color || '#ffffff';
+    it.mode = mode;
+    it.size = d.fontsize ? Math.max(14, Math.min(34, d.fontsize)) : this.fontBase;
+    it.speed = 0;
+    it.entered = false;
+    it.done = false;
+    it.lane = 0;
+    this.measure(it);
+    if (!silent) {
+      this.items.push(it);
+    } else if (it.time > this.current) {
+      this.items.push(it);
+    }
+  }
+
+  private measure(it: DmItem) {
+    this.ctx.font = `600 ${it.size}px "Google Sans", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    it.w = this.ctx.measureText(it.content).width;
+    it.h = it.size * 1.5;
+    if (it.mode === 'top' || it.mode === 'bottom') {
+      const lanes = it.mode === 'top' ? this.laneFreeTop : this.laneFreeBot;
+      let lane = lanes.indexOf(Math.min(...lanes));
+      if (lane < 0) lane = 0;
+      lanes[lane] = it.time;
+      it.lane = lane;
+      it.y = it.mode === 'top'
+        ? 10 + lane * (it.h + 4)
+        : this.H - 34 - (lanes.length - 1 - lane) * (it.h + 4);
+      it.x = (this.W - it.w) / 2;
+      it.speed = 0;
     } else {
-      speed = 0;
-      if (kind === 'top') {
-        y = this.topRow * LANE_HEIGHT + 14;
-        this.topRow = (this.topRow + 1) % 3;
-      } else {
-        y = this.height - this.bottomRow * LANE_HEIGHT - 14;
-        this.bottomRow = (this.bottomRow + 1) % 3;
-      }
-      x = this.width / 2 - w / 2;
+      it.y = 10 + Math.floor(Math.random() * 8) * (this.fontBase + 6);
+      it.x = this.W;
+      it.speed = Math.max(55, Math.min(95, it.w / 5)); // px/s，约 6-8s 横穿
     }
-    this.active.push({
-      text: it.text,
-      color: it.color || '#ffffff',
-      size,
-      x, y, speed, w, kind,
-      born: it.timeSec,
-      spawnAt: performance.now() - ageSec * 1000,
-    });
   }
 
-  /** 每帧调用：dtSec 为播放推进秒数（暂停时传 0） */
-  update(dtSec: number) {
-    // 移动
-    const next: ActiveItem[] = [];
-    for (const a of this.active) {
-      if (a.kind === 'scroll') {
-        a.x -= a.speed * dtSec;
-        if (a.x + a.w > -20) {
-          const lane = this.lanes.find((l) => l.y === a.y);
-          if (lane) lane.bottomEdge = Math.min(lane.bottomEdge, a.x - a.w - 8);
-          next.push(a);
-        }
-      } else if (performance.now() - a.spawnAt < TOP_SHOW_MS) {
-        next.push(a);
+  setPaused(p: boolean) {
+    this.paused = p;
+    if (!p) this.last = performance.now();
+  }
+
+  private hitRects: { x: number; y: number; w: number; h: number; time: number }[] = [];
+  onClick = (e: MouseEvent) => {
+    const r = this.canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    // 命中检测：取最近 1.5s 内的项
+    const now = this.current;
+    let best: { time: number; d: number } | null = null;
+    for (const hr of this.hitRects) {
+      if (x >= hr.x - 4 && x <= hr.x + hr.w + 4 && y >= hr.y - 4 && y <= hr.y + hr.h + 4) {
+        const d = Math.abs(hr.time - now);
+        if (!best || d < best.d) best = { time: hr.time, d };
       }
     }
-    this.active = next;
-  }
-
-  /** 播放时间推进时调用：spawn 新弹幕（由 Player 传入 currentTime 与上一帧时间） */
-  advance(fromSec: number, toSec: number) {
-    if (toSec < fromSec - 0.5) {
-      // 大回退 seek：由 load 处理
-      return;
-    }
-    while (this.itemIndex < this.items.length && this.items[this.itemIndex].timeSec <= toSec) {
-      const it = this.items[this.itemIndex];
-      if (it.timeSec >= fromSec - 0.2) this.spawn(it, 0);
-      this.itemIndex++;
-    }
-  }
-
-  render() {
-    const ctx = this.ctx;
-    ctx.clearRect(0, 0, this.width, this.height);
-    this.hitBoxes = [];
-    if (!this.visible) return;
-    for (const a of this.active) {
-      ctx.globalAlpha = this.opacity;
-      ctx.font = `bold ${a.size}px "PingFang SC","Microsoft YaHei",sans-serif`;
-      ctx.textBaseline = 'alphabetic';
-      ctx.lineWidth = 3;
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-      ctx.strokeText(a.text, a.x, a.y);
-      ctx.fillStyle = a.color;
-      ctx.fillText(a.text, a.x, a.y);
-      ctx.globalAlpha = 1;
-      this.hitBoxes.push({ x: a.x, y: a.y - a.size, w: a.w, h: a.size + 8, sec: a.born });
-    }
-  }
-
-  private handleClick = (e: MouseEvent) => {
-    const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    // 优先取最靠近点击点的弹幕
-    let best: { sec: number; d: number } | null = null;
-    for (const h of this.hitBoxes) {
-      if (x >= h.x - 4 && x <= h.x + h.w + 4 && y >= h.y - 4 && y <= h.y + h.h + 4) {
-        const d = Math.abs(y - (h.y + h.h / 2));
-        if (!best || d < best.d) best = { sec: h.sec, d };
-      }
-    }
-    if (best) this.onSeek?.(best.sec);
+    if (best && this.onSeek) this.onSeek(best.time);
   };
 
-  destroy() {
-    this.canvas.removeEventListener('click', this.handleClick);
-    this.canvas.getContext('2d')?.clearRect(0, 0, this.width, this.height);
+  frame(ts: number) {
+    this.raf = requestAnimationFrame(this.frame);
+    if (!this.W) { this.resize(); return; }
+    const dt = Math.min(0.1, (ts - (this.last || ts)) / 1000);
+    this.last = ts;
+    const t = this.current;
+    if (this.paused) return;
+
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.W, this.H);
+    ctx.globalAlpha = this.opacity;
+    ctx.textBaseline = 'top';
+    this.hitRects.length = 0;
+
+    const alive: DmItem[] = [];
+    for (const it of this.items) {
+      if (it.done) { this.free(it); continue; }
+      if (it.time > t + 0.35) { alive.push(it); continue; }
+      const age = t - it.time;
+      if (age < 0) continue;
+      if (it.mode === 'scroll') {
+        if (!it.entered) { it.entered = true; it.x = this.W; }
+        it.x -= it.speed * dt;
+        if (it.x + it.w < -10) { this.free(it); continue; }
+        ctx.font = `600 ${it.size}px "Google Sans", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        this.draw(ctx, it.content, it.x, it.y, it.color);
+        this.hitRects.push({ x: it.x, y: it.y, w: it.w, h: it.h, time: it.time });
+      } else {
+        const life = 5.5;
+        if (age > life) { this.free(it); continue; }
+        const fade = age > life - 1 ? (life - age) : 1;
+        ctx.globalAlpha = this.opacity * Math.min(1, fade);
+        ctx.font = `600 ${it.size}px "Google Sans", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        this.draw(ctx, it.content, it.x, it.y, it.color);
+        ctx.globalAlpha = this.opacity;
+        this.hitRects.push({ x: it.x, y: it.y, w: it.w, h: it.h, time: it.time });
+      }
+      alive.push(it);
+    }
+    this.items = alive;
+  }
+
+  private draw(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
+    // 描边阴影保证可读性（两次绘制，代价低）
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+
+  start() {
+    this.last = performance.now();
+    cancelAnimationFrame(this.raf);
+    this.raf = requestAnimationFrame(this.frame);
   }
 }

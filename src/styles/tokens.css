@@ -1,0 +1,111 @@
+/* ============================================================
+   ZawaZawa Client — Design Tokens
+   Single theme: Google Material 3 (dark baseline, violet tint)
+   + Liquid Glass surfaces. Performance is the first priority:
+   - backdrop-filter is reserved for a small number of large
+     surfaces (app bar / bottom nav / dialog / player bar)
+   - cards use "glass-lite": translucent bg + edge highlight,
+     NO blur (cheap to paint, no compositor cost in lists)
+   ============================================================ */
+:root {
+  color-scheme: dark;
+
+  /* ---- M3 color roles (dark, violet brand) ---- */
+  --md-primary: #d0bcff;
+  --md-on-primary: #381e72;
+  --md-primary-container: #4f378b;
+  --md-on-primary-container: #eaddff;
+  --md-secondary: #ccc2dc;
+  --md-on-secondary: #332d41;
+  --md-secondary-container: #4a4458;
+  --md-on-secondary-container: #e8deff;
+  --md-tertiary: #efb8c8;
+  --md-on-tertiary: #492532;
+  --md-tertiary-container: #633b48;
+  --md-on-tertiary-container: #ffd8e4;
+  --md-error: #f2b8b5;
+  --md-on-error: #601410;
+  --md-error-container: #8c1d18;
+  --md-on-error-container: #f9dcdc;
+  --md-success: #a3d9a5;
+  --md-success-container: #2a5b30;
+  --md-warning: #f5d38b;
+  --md-warning-container: #6b5320;
+
+  --md-surface: #141218;
+  --md-on-surface: #e6e0e9;
+  --md-surface-dim: #0f0d13;
+  --md-surface-bright: #3b383e;
+  --md-surface-container-lowest: #0f0d13;
+  --md-surface-container-low: #1d1b20;
+  --md-surface-container: #211f26;
+  --md-surface-container-high: #2b2930;
+  --md-surface-container-highest: #36343b;
+  --md-on-surface-variant: #cac4d0;
+  --md-outline: #938f99;
+  --md-outline-variant: #49454f;
+  --md-inverse-surface: #e6e0e9;
+  --md-inverse-on-surface: #322f35;
+  --md-inverse-primary: #6750a4;
+  --md-scrim: rgba(0, 0, 0, 0.55);
+  --md-shadow: rgba(0, 0, 0, 0.55);
+  --md-surface-tint: #d0bcff;
+
+  /* ---- Liquid glass layer (single theme) ---- */
+  --glass-1: rgba(255, 255, 255, 0.05);
+  --glass-2: rgba(255, 255, 255, 0.09);
+  --glass-3: rgba(255, 255, 255, 0.14);
+  --glass-blur: 22px;
+  --glass-saturate: 165%;
+  --glass-edge: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.05) 38%, rgba(255, 255, 255, 0) 68%);
+  --glass-edge-soft: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03) 40%, rgba(255, 255, 255, 0) 70%);
+  --glass-refraction: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02) 22%, rgba(255, 255, 255, 0) 45%);
+
+  /* ---- Typography (M3 scale) ---- */
+  --font-sans: "Google Sans Text", "Google Sans", Roboto, "PingFang SC", "HarmonyOS Sans SC",
+    "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-display-lg: 700 40px/1.2 var(--font-sans);
+  --text-display-sm: 600 32px/1.25 var(--font-sans);
+  --text-headline-md: 500 28px/1.3 var(--font-sans);
+  --text-headline-sm: 500 24px/1.35 var(--font-sans);
+  --text-title-lg: 500 20px/1.4 var(--font-sans);
+  --text-title-md: 500 16px/1.45 var(--font-sans);
+  --text-title-sm: 500 14px/1.4 var(--font-sans);
+  --text-body-lg: 400 16px/1.6 var(--font-sans);
+  --text-body-md: 400 14px/1.55 var(--font-sans);
+  --text-body-sm: 400 12.5px/1.5 var(--font-sans);
+  --text-label-lg: 500 14px/1.4 var(--font-sans);
+  --text-label-md: 500 12px/1.4 var(--font-sans);
+  --text-label-sm: 500 11px/1.35 var(--font-sans);
+
+  /* ---- Shape (M3) ---- */
+  --shape-xs: 6px;
+  --shape-sm: 10px;
+  --shape-md: 14px;
+  --shape-lg: 18px;
+  --shape-xl: 26px;
+  --shape-2xl: 32px;
+  --shape-full: 999px;
+
+  /* ---- Elevation (M3 tonal) ---- */
+  --e1: 0 1px 2px rgba(0, 0, 0, 0.45), 0 1px 3px 1px rgba(0, 0, 0, 0.28);
+  --e2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 6px 2px rgba(0, 0, 0, 0.3);
+  --e3: 0 4px 8px 3px rgba(0, 0, 0, 0.32), 0 1px 3px rgba(0, 0, 0, 0.5);
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --dur-1: 90ms;
+  --dur-2: 180ms;
+  --dur-3: 280ms;
+  --dur-4: 420ms;
+
+  /* ---- Layout ---- */
+  --appbar-h: 60px;
+  --bottomnav-h: 64px;
+  --nav-rail-w: 84px;
+  --content-max: 1280px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}

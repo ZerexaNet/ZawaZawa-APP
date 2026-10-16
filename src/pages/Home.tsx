@@ -1,120 +1,99 @@
-import { useEffect, useRef, useState } from 'react';
-import { I } from '../icons';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api';
-import { asArray, type Article, type Video } from '../types';
-import { Cover, Empty, Loading, VideoCard } from '../components';
-import { CATEGORY_NAMES } from '../lib/utils';
-import { errMsg, toast } from '../store';
+import { videos, articles as articlesApi } from '../lib/api';
+import type { Article, Video } from '../lib/types';
+import { VideoCard } from '../components/VideoCard';
+import { Chip, Loading, useInfinite, Skeleton } from '../components/ui';
+import { I } from '../components/icons';
+import { CATEGORY_NAMES } from '../lib/categories';
+import { asList, asTotal } from '../lib/http';
+import { fmtViews, timeAgo } from '../lib/util';
 
 const SORTS = [
-  { id: 'recommend', label: '推荐' },
-  { id: 'latest', label: '最新' },
-  { id: 'popular', label: '热门' },
+  { v: 'recommend', label: '推荐' },
+  { v: 'latest', label: '最新' },
 ];
 
-export function HomePage() {
+export default function Home() {
   const [sort, setSort] = useState('recommend');
   const [cat, setCat] = useState('All');
-  const [videos, setVideos] = useState<Video[]>([]);
-  const [articles, setArticles] = useState<Article[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const offset = useRef(0);
-  const sentinel = useRef<HTMLDivElement>(null);
-  const page = 24;
+  const [videosList, setVideosList] = useState<Video[]>([]);
+  const [total, setTotal] = useState(0);
+  const [artList, setArtList] = useState<Article[]>([]);
 
-  const load = async (reset: boolean) => {
-    if (reset) { offset.current = 0; setVideos([]); setHasMore(true); }
-    if (reset || !hasMore) { if (reset) setLoading(true); }
-    try {
-      const d = await api.videos({ category: cat, sort, limit: page, offset: offset.current });
-      const arr = asArray<Video>(d);
-      setVideos((prev) => (reset ? arr : [...prev, ...arr.filter((a) => !prev.some((p) => p.id === a.id))]));
-      offset.current += arr.length;
-      setHasMore(arr.length >= page);
-    } catch (e) {
-      toast(errMsg(e), 'err');
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  };
-
-  useEffect(() => { void load(true); }, [sort, cat]);
-
-  useEffect(() => {
-    api.homeArticles(8).then((d) => setArticles(asArray<Article>(d))).catch(() => {});
+  const loadArt = useCallback(() => {
+    articlesApi.homeLatest(6).then((d: any) => setArtList(asList<Article>(d))).catch(() => { });
   }, []);
+  useEffect(() => { loadArt(); }, [loadArt]);
 
-  // 无限滚动
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el) return;
-    const io = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && !loading && !loadingMore && hasMore) {
-        setLoadingMore(true);
-        void load(false);
-      }
-    }, { rootMargin: '600px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [loading, loadingMore, hasMore, sort, cat]);
+  const onLoad = useCallback(async () => {
+    const offset = videosList.length;
+    const d: any = await videos.list({ category: cat, sort, limit: 24, offset });
+    const items = asList<Video>(d);
+    setTotal(asTotal(d, -1));
+    setVideosList(prev => [...prev, ...items.filter(v => !prev.some(p => p.id === v.id))]);
+    return items.length > 0;
+  }, [cat, sort, videosList.length]);
 
-  const navLinks = [
-    { to: '/referendums', label: '社区公投' },
-    { to: '/leaderboard', label: '何意味榜' },
-    { to: '/trending', label: '热门' },
-    { to: '/following', label: '关注动态' },
-  ];
+  const inf = useInfinite(onLoad, [cat, sort]);
+
+  // 切换分类/排序时重置
+  useEffect(() => { setVideosList([]); }, [cat, sort]);
 
   return (
-    <div className="page">
-      <div className="chip-row" style={{ marginBottom: 10 }}>
-        {navLinks.map((l) => (
-          <Link key={l.to} to={l.to} className="chip">{l.label}</Link>
-        ))}
-      </div>
-      <div className="chip-row" style={{ marginBottom: 14 }}>
-        {SORTS.map((s) => (
-          <button key={s.id} className={'chip' + (sort === s.id ? ' active' : '')} onClick={() => setSort(s.id)}>{s.label}</button>
-        ))}
-        <select
-          value={cat}
-          onChange={(e) => setCat(e.target.value)}
-          style={{ padding: '6px 10px', borderRadius: 20, border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink)', fontSize: 13 }}
-        >
-          <option value="All">全部分类</option>
-          {CATEGORY_NAMES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+    <div className="page fade-in">
+      <div className="row row--between" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <h1 className="page-title">ZawaZawa</h1>
+        <div className="seg">
+          {SORTS.map(s => (
+            <button key={s.v} className={sort === s.v ? 'active' : ''} onClick={() => setSort(s.v)} type="button">{s.label}</button>
+          ))}
+        </div>
       </div>
 
-      {loading ? <Loading /> : videos.length === 0 ? <Empty text="暂无视频" icon="video" /> : (
-        <div className="grid-videos">{videos.map((v) => <VideoCard key={v.id} v={v} />)}</div>
+      <div className="chip-row">
+        <Chip selected={cat === 'All'} onClick={() => setCat('All')}>全部</Chip>
+        {CATEGORY_NAMES.map(c => (
+          <Chip key={c} selected={cat === c} onClick={() => setCat(c)}>{c}</Chip>
+        ))}
+      </div>
+
+      {videosList.length === 0 && !inf.loading ? (
+        <div className="col" style={{ gap: 10 }}>
+          {[0, 1, 2, 3].map(i => <Skeleton key={i} w="100%" h={300} r={18} />)}
+        </div>
+      ) : (
+        <div className="video-grid">
+          {videosList.map(v => <VideoCard key={v.id} v={v} />)}
+        </div>
       )}
-      <div ref={sentinel} />
-      {loadingMore && <Loading />}
-      {!hasMore && videos.length > 0 && <div className="muted" style={{ textAlign: 'center', padding: 16 }}>— 已经到底啦 —</div>}
+      {inf.sentinelEl}
+      {inf.loading && <Loading text="加载更多…" />}
+      {!inf.loading && inf.done && total >= 0 && videosList.length > 0 && (
+        <div className="center muted small" style={{ padding: 16 }}>— 已经到底了 —</div>
+      )}
 
-      {articles.length > 0 && (
-        <>
-          <div className="section-title"><I name="file" size={15} /> 最新专栏</div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {articles.map((a) => (
-              <Link key={a.id} to={`/article/${a.id}`} className="card" style={{ display: 'flex', gap: 12, padding: 12 }}>
-                {a.cover_url && <Cover src={a.cover_url} alt="" style={{ width: 110, height: 74, objectFit: 'cover', borderRadius: 10, flexShrink: 0 }} />}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{a.title}</div>
-                  {a.summary && <div className="muted" style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.summary}</div>}
-                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-                    {a.author_username} · {a.created_at}
-                  </div>
+      {artList.length > 0 && (
+        <section className="section" style={{ marginTop: 8 }}>
+          <div className="section-head">
+            <h2 className="row" style={{ gap: 8 }}><I name="newspaper" size={19} /> 最新专栏</h2>
+          </div>
+          <div className="rail">
+            {artList.map(a => (
+              <Link key={a.id} to={`/article/${a.id}`} className="card card--hover" style={{ padding: 12, display: 'block' }}>
+                <div style={{ aspectRatio: '16/9', borderRadius: 10, overflow: 'hidden', marginBottom: 10, background: 'var(--md-surface-container)' }}>
+                  {a.cover_url ? <img src={a.cover_url} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--md-outline)' }}><I name="newspaper" size={26} /></div>}
+                </div>
+                <div className="clamp2" style={{ font: 'var(--text-title-sm)', lineHeight: 1.4 }}>{a.title}</div>
+                <div className="row muted small" style={{ marginTop: 8, gap: 6 }}>
+                  <span>{a.author_username}</span><span>·</span>
+                  <span>{fmtViews(a.views)} 阅读</span><span>·</span>
+                  <span>{timeAgo(a.created_at)}</span>
                 </div>
               </Link>
             ))}
           </div>
-        </>
+        </section>
       )}
     </div>
   );

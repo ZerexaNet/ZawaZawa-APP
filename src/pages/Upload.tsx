@@ -1,457 +1,568 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { I } from '../icons';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
-import { errMsg, toast, useAuth } from '../store';
-import { StreamingSha256, CATEGORIES, fmtSize } from '../lib/utils';
-import { asArray, type Collection, type Video } from '../types';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { upload, videos, collections, articles } from '../lib/api';
+import type { Video } from '../lib/types';
+import { Btn, Field, Progress, Spinner, Switch } from '../components/ui';
+import { I } from '../components/icons';
+import { useAuth } from '../store/auth';
+import { useToast, errMsg } from '../store/toast';
+import { CATEGORIES, CATEGORY_NAMES, catLabel } from '../lib/categories';
+import { fmtBytes, sha256Hex } from '../lib/util';
 
-const MAX_SIZE = 15 * 1024 ** 3; // 15GB
-const MAX_DURATION = 2 * 60 * 60; // 2h
-const PART_SIZE = 10 * 1024 * 1024; // 10MB
+const PART_SIZE = 10 * 1024 * 1024;
+const CONCURRENCY = 4;
+const MAX_SIZE = 15 * 1024 * 1024 * 1024; // 15GB
 
-type Phase = 'idle' | 'hashing' | 'uploading' | 'done' | 'error';
+type Phase = 'pick' | 'meta' | 'hashing' | 'uploading' | 'complete' | 'done' | 'error' | 'article';
 
-export function UploadPage() {
+export default function Upload() {
   const nav = useNavigate();
-  const { user } = useAuth();
+  const [params] = useSearchParams();
+  const editId = params.get('edit');
+  const articleId = params.get('article');
+  const user = useAuth(s => s.user);
+  const toast = useToast(s => s.push);
+
+  const [phase, setPhase] = useState<Phase>('pick');
   const [file, setFile] = useState<File | null>(null);
+  const [drag, setDrag] = useState(false);
+  const [err, setErr] = useState('');
+
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
-  const [catMain, setCatMain] = useState('综合');
-  const [catSub, setCatSub] = useState('Vlog');
+  const [catMain, setCatMain] = useState('General');
+  const [catSub, setCatSub] = useState(CATEGORIES['General'][0]);
   const [sourceUrl, setSourceUrl] = useState('');
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [progress, setProgress] = useState(0);
-  const [stageText, setStageText] = useState('');
-  const [hash, setHash] = useState('');
-  const [existingVideo, setExistingVideo] = useState<Video | null>(null);
-  const [resultVideo, setResultVideo] = useState<Video | null>(null);
-  const [errorMsg, setErrorMsg] = useState('');
   const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [coverUrl, setCoverUrl] = useState('');
-  const [subFiles, setSubFiles] = useState<File[]>([]);
-  const [collections, setCollections] = useState<Collection[]>([]);
-  const [targetCollection, setTargetCollection] = useState('');
-  const [partTitle, setPartTitle] = useState('');
+  const [autoCover, setAutoCover] = useState(true);
+  const [coverPreview, setCoverPreview] = useState('');
+
+  const [initInfo, setInitInfo] = useState<any>(null);
+  const [progress, setProgress] = useState(0);
+  const [doneVideo, setDoneVideo] = useState<Video | null>(null);
+  const [myCols, setMyCols] = useState<any[]>([]);
+  const [aborting, setAborting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const uploadIdRef = useRef('');
-  const keyRef = useRef('');
+
+  // 快速导入
+  const [importUrl, setImportUrl] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  // 专栏
+  const [artTitle, setArtTitle] = useState('');
+  const [artContent, setArtContent] = useState('');
+  const [artCover, setArtCover] = useState<File | null>(null);
+  const [artImages, setArtImages] = useState<File[]>([]);
+  const [artBusy, setArtBusy] = useState(false);
 
   useEffect(() => {
-    if (!user) nav('/login');
+    if (!user) { nav('/login?next=' + encodeURIComponent(location.pathname)); return; }
   }, [user, nav]);
 
+  // 编辑模式：加载视频信息
   useEffect(() => {
-    if (user) api.myCollections().then((d) => setCollections(asArray<Collection>(d))).catch(() => {});
+    if (!editId) return;
+    videos.detail(editId).then((d: any) => {
+      const v = d?.video ?? d;
+      setTitle(v.title || '');
+      setDesc(v.description || '');
+      const c = (v.category || '').split(' / ');
+      setCatMain(c[0] || 'General');
+      setCatSub(c[1] || '其他');
+      setSourceUrl(v.source_url || '');
+      setPhase('meta');
+    }).catch(e => { setErr(errMsg(e)); setPhase('error'); });
+  }, [editId]);
+
+  // 专栏编辑模式
+  useEffect(() => {
+    if (!articleId) return;
+    articles.detail(articleId).then((d: any) => {
+      const a = d?.article ?? d;
+      setArtTitle(a.title || '');
+      setArtContent(a.content || '');
+      setPhase('article');
+    }).catch(e => { setErr(errMsg(e)); setPhase('error'); });
+  }, [articleId]);
+
+  useEffect(() => {
+    if (!user) return;
+    import('../lib/api').then(({ users }) => users.meCollections().then((d: any) => {
+      setMyCols(Array.isArray(d) ? d : d?.items || []);
+    }).catch(() => { }));
   }, [user]);
 
-  // 快速导入（B站链接）
-  const [quickUrl, setQuickUrl] = useState('');
-  const [quickBusy, setQuickBusy] = useState(false);
-  const quickImport = async () => {
-    if (!quickUrl.trim()) return;
-    setQuickBusy(true);
-    try {
-      await api.quickImport(quickUrl.trim(), `${catMain} / ${catSub}`);
-      toast('快速导入成功，视频进入审核队列');
-      nav('/profile');
-    } catch (e) {
-      toast(errMsg(e), 'err');
-    } finally { setQuickBusy(false); }
+  const pickFile = (f: File | null) => {
+    if (!f) return;
+    if (f.size > MAX_SIZE) { setErr('文件超过 15GB 上限'); return; }
+    setFile(f);
+    setCoverPreview('');
+    setPhase('meta');
+    // 预取封面（video 文件）
+    if (f.type.startsWith('video/') && autoCover) {
+      captureCover(f);
+    }
   };
 
-  const onPickFile = (f: File) => {
-    if (f.size > MAX_SIZE) { toast('文件超过 15GB 上限', 'err'); return; }
-    setFile(f);
-    setPhase('idle');
-    setProgress(0);
-    if (!title) setTitle(f.name.replace(/\.[^.]+$/, ''));
-    // 预检时长
+  const captureCover = (f: File) => {
     const url = URL.createObjectURL(f);
     const v = document.createElement('video');
     v.preload = 'metadata';
     v.src = url;
-    v.onloadedmetadata = () => {
-      if (v.duration > MAX_DURATION + 5) {
-        toast('视频超过 2 小时上限', 'err');
-        setFile(null);
-      }
+    v.muted = true;
+    v.onloadeddata = () => {
+      const d = v.duration || 100;
+      v.currentTime = Math.min(d * 0.2, 30);
+    };
+    v.onseeked = () => {
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = v.videoWidth || 640;
+        cv.height = v.videoHeight || 360;
+        const ctx = cv.getContext('2d')!;
+        ctx.drawImage(v, 0, 0, cv.width, cv.height);
+        setCoverPreview(cv.toDataURL('image/jpeg', 0.85));
+      } catch { /* ignore */ }
+      v.src = '';
       URL.revokeObjectURL(url);
     };
+    v.onerror = () => { URL.revokeObjectURL(url); };
   };
 
-  const startUpload = useCallback(async () => {
+  /* ---------- 发布 ---------- */
+  const publish = async () => {
     if (!file) return;
-    if (!title.trim()) { toast('请填写标题', 'err'); return; }
-    const f = file;
+    if (!title.trim()) { setErr('请输入标题'); return; }
+    setErr('');
     setPhase('hashing');
-    setStageText('正在计算文件指纹…');
-    setProgress(0);
-    let hashVal = '';
     try {
-      // 1. 计算 SHA-256（增量）
-      const hasher = new StreamingSha256();
-      const step = 16 * 1024 * 1024;
-      let off = 0;
-      while (off < f.size) {
-        const buf = await f.slice(off, Math.min(off + step, f.size)).arrayBuffer();
-        hasher.feed(new Uint8Array(buf));
-        off += step;
-        setProgress(Math.min(5, (off / f.size) * 5));
-        if (off % (step * 4) === 0) await new Promise((r) => setTimeout(r, 0)); // 让出 UI
-      }
-      hashVal = hasher.digestHex();
-      setHash(hashVal);
-      setStageText('检查是否重复上传…');
+      const buf = await file.arrayBuffer();
+      const h = await sha256Hex(buf);
+      // 秒传检查
+      try {
+        const ck: any = await upload.checkHash(h);
+        if (ck?.exists) {
+          toast('秒传成功！检测到相同文件', 'success');
+          setDoneVideo({ id: ck.existingVideoId, title: title.trim() } as Video);
+          setPhase('done');
+          return;
+        }
+      } catch { /* 忽略秒传检查失败 */ }
 
-      // 2. 去重检查
-      const chk = await api.uploadCheckHash(hashVal);
-      if (chk.exists && chk.existingVideoId) {
-        try {
-          const v = await api.video(chk.existingVideoId);
-          setExistingVideo(v);
-        } catch { /* ignore */ }
-        setPhase('idle');
-        setProgress(0);
-        setStageText('该文件似乎已经上传过');
-        return;
-      }
-
-      // 3. 初始化上传
       setPhase('uploading');
-      setStageText('初始化上传…');
-      const small = f.size <= PART_SIZE * 2;
-      const init = await api.uploadInitiate(f.name, f.type || 'video/mp4', small);
-      const { uploadId, key, videoId } = init;
-      uploadIdRef.current = uploadId;
-      keyRef.current = key;
+      const ac = new AbortController();
+      abortRef.current = ac;
 
-      const controller = new AbortController();
-      abortRef.current = controller;
-      let done = false;
+      const init: any = await upload.init({ filename: file.name, contentType: file.type || 'video/mp4' });
+      setInitInfo(init);
+      const { uploadId, key, videoId, directUpload, putUrl } = init;
+      let parts: { PartNumber: number; ETag: string }[] = [];
 
-      const finish = async (parts: { PartNumber: number; ETag: string }[]) => {
-        done = true;
-        setStageText('提交中，创建视频…');
-        setProgress(99);
-        const res = await api.uploadComplete({
-          uploadId, key, videoId, parts,
-          title: title.trim(),
-          description: desc.trim() || undefined,
-          category: `${catMain} / ${catSub}`,
-          source_url: sourceUrl.trim() || undefined,
-          file_hash: hashVal,
-        });
-        setProgress(100);
-        setStageText('上传完成');
-
-        // 4. 封面
-        if (coverFile) {
-          setStageText('上传封面…');
-          try { await api.coverUpdate(videoId, coverFile, coverFile.type || 'image/jpeg'); } catch (e) { toast('封面上传失败：' + errMsg(e), 'err'); }
-        }
-        // 5. 字幕
-        for (const sf of subFiles) {
-          try {
-            const lang = sf.name.toLowerCase().includes('en') ? 'en' : 'zh';
-            await api.subtitleUpload(videoId, sf, lang, sf.name.replace(/\.[^.]+$/, ''));
-          } catch { /* ignore */ }
-        }
-        // 6. 加入合集
-        if (targetCollection) {
-          try { await api.collectionAddItem(targetCollection, videoId, partTitle.trim() || undefined); } catch { /* ignore */ }
-        }
-
-        const vRes = res as Video;
-        setResultVideo({ ...vRes, id: vRes.id || videoId, title: vRes.title || title });
-        setPhase('done');
-        // 刷新合集
-        try { setCollections(asArray<Collection>(await api.myCollections())); } catch { /* ignore */ }
+      const meta = {
+        title: title.trim(),
+        description: desc.trim(),
+        category: catLabel(catMain, catSub),
+        source_url: sourceUrl.trim() || undefined,
+        file_hash: h,
       };
 
-      if (init.directUpload && !init.putUrl) {
-        // 直传但服务端未给 putUrl → 用 presign-single 获取整文件预签名地址
-        setStageText('获取直传地址…');
-        try {
-          const { url } = await api.uploadPresignSingle(key, uploadId);
-          setStageText('正在上传…');
-          await new Promise<void>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('PUT', url);
-            xhr.setRequestHeader('Content-Type', f.type || 'video/mp4');
-            if (controller.signal.aborted) reject(new Error('aborted'));
-            controller.signal.addEventListener('abort', () => { xhr.abort(); reject(new Error('aborted')); });
-            xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(5 + (e.loaded / e.total) * 94); };
-            xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('upload failed ' + xhr.status)));
-            xhr.onerror = () => reject(new Error('network error'));
-            xhr.send(f);
-          });
-          await finish([]);
-        } catch (e1) {
-          if (String(e1).includes('aborted')) { setPhase('idle'); setStageText('已取消'); return; }
-          setStageText('直传失败，切换服务器代理上传…');
-          try {
-            await api.uploadProxyPut(key, f, f.type || 'video/mp4', (p) => setProgress(5 + p * 94), controller.signal);
-            await finish([]);
-          } catch (e2) {
-            if (String(e2).includes('aborted')) { setPhase('idle'); setStageText('已取消'); await api.uploadCancel(uploadId, key).catch(() => {}); return; }
-            throw e2;
-          }
-        }
-        return;
-      }
-
-      if (init.directUpload && init.putUrl) {
+      if (directUpload && putUrl) {
         // 直传模式
-        setStageText('正在上传…');
         try {
-          await new Promise<void>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('PUT', init.putUrl!);
-            xhr.setRequestHeader('Content-Type', f.type || 'video/mp4');
-            if (controller.signal.aborted) reject(new Error('aborted'));
-            controller.signal.addEventListener('abort', () => { xhr.abort(); reject(new Error('aborted')); });
-            xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(5 + (e.loaded / e.total) * 94); };
-            xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('upload failed ' + xhr.status)));
-            xhr.onerror = () => reject(new Error('network error'));
-            xhr.send(f);
-          });
-          await finish([]);
-        } catch (e1) {
-          if (String(e1).includes('aborted')) { setPhase('idle'); setStageText('已取消'); return; }
-          // 回退到代理上传
-          setStageText('直传失败，切换服务器代理上传…');
-          try {
-            await api.uploadProxyPut(key, f, f.type || 'video/mp4', (p) => setProgress(5 + p * 94), controller.signal);
-            await finish([]);
-          } catch (e2) {
-            if (String(e2).includes('aborted')) { setPhase('idle'); setStageText('已取消'); await api.uploadCancel(uploadId, key).catch(() => {}); return; }
-            throw e2;
-          }
+          await upload.putToPresigned(putUrl, file, ac.signal);
+          parts = [];
+        } catch (e: any) {
+          if (e?.name === 'AbortError') throw e;
+          // 回退代理
+          await upload.proxyPut(key, file, file.type || 'application/octet-stream');
         }
       } else {
         // 分片上传
-        const totalParts = Math.ceil(f.size / PART_SIZE);
-        const parts: { PartNumber: number; ETag: string }[] = new Array(totalParts);
-        let completed = 0;
-        let partNo = 0;
-        const worker = async () => {
-          while (!done) {
-            const n = ++partNo;
-            if (n > totalParts) return;
-            const start = (n - 1) * PART_SIZE;
-            const end = Math.min(start + PART_SIZE, f.size);
-            const chunk = f.slice(start, end);
-            let etag = '';
-            let ok = false;
-            for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-              try {
-                const { url } = await api.uploadPresignPart(key, uploadId, n);
-                await new Promise<void>((resolve, reject) => {
-                  const xhr = new XMLHttpRequest();
-                  xhr.open('PUT', url);
-                  if (controller.signal.aborted) reject(new Error('aborted'));
-                  controller.signal.addEventListener('abort', () => { xhr.abort(); reject(new Error('aborted')); });
-                  xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) { etag = xhr.getResponseHeader('ETag') || `'part-${n}'`; resolve(); }
-                    else reject(new Error('part ' + n + ' failed ' + xhr.status));
-                  };
-                  xhr.onerror = () => reject(new Error('part network error'));
-                  xhr.send(chunk);
-                });
-                ok = true;
-              } catch (pe) {
-                if (String(pe).includes('aborted')) throw pe;
-                await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
-              }
+        const totalParts = Math.ceil(file.size / PART_SIZE);
+        setProgress(0);
+        let doneParts = 0;
+        const etags: (string | undefined)[] = new Array(totalParts);
+        let cursor = 0;
+
+        const uploadOne = async (partNumber: number) => {
+          const start = (partNumber - 1) * PART_SIZE;
+          const end = Math.min(file.size, start + PART_SIZE);
+          const chunk = file.slice(start, end);
+          let lastErr: any;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              const presigned: any = await upload.presignPart(key, uploadId, partNumber);
+              const url = presigned?.url || presigned?.putUrl;
+              const etag = await upload.putToPresigned(url, chunk, ac.signal);
+              etags[partNumber - 1] = etag;
+              doneParts++;
+              setProgress(doneParts / totalParts);
+              return;
+            } catch (e: any) {
+              lastErr = e;
+              if (e?.name === 'AbortError') throw e;
+              await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
             }
-            if (!ok) throw new Error('分片 ' + n + ' 上传失败');
-            parts[n - 1] = { PartNumber: n, ETag: etag };
-            completed++;
-            setProgress(5 + (completed / totalParts) * 94);
-            setStageText(`分片上传 ${completed}/${totalParts}`);
+          }
+          throw lastErr;
+        };
+
+        const worker = async () => {
+          while (true) {
+            const n = cursor++;
+            if (n >= totalParts) return;
+            await uploadOne(n + 1);
           }
         };
-        const CONC = 3;
-        try {
-          const workers = Array.from({ length: Math.min(CONC, totalParts) }, () => worker());
-          await Promise.all(workers);
-          if (!done) await finish(parts);
-        } catch (e1) {
-          if (String(e1).includes('aborted')) { setPhase('idle'); setStageText('已取消'); await api.uploadCancel(uploadId, key).catch(() => {}); return; }
-          // 分片失败 → 尝试整体代理上传
-          setStageText('分片上传失败，尝试服务器代理整体上传…');
+        const workers: Promise<void>[] = [];
+        for (let i = 0; i < Math.min(CONCURRENCY, totalParts); i++) workers.push(worker());
+        await Promise.all(workers);
+
+        if (etags.some(e => !e)) {
+          // 某些分片没拿到 ETag（CORS 头未暴露），尝试代理整文件兜底
           try {
-            await api.uploadProxyPut(key, f, f.type || 'video/mp4', (p) => setProgress(5 + p * 94), controller.signal);
-            if (!done) await finish([]);
-          } catch (e2) {
-            if (String(e2).includes('aborted')) { setPhase('idle'); setStageText('已取消'); await api.uploadCancel(uploadId, key).catch(() => {}); return; }
-            throw e2;
+            await upload.proxyPut(key, file, file.type || 'application/octet-stream');
+            parts = [];
+          } catch {
+            parts = etags.map((e2, i2) => ({ PartNumber: i2 + 1, ETag: e2 || `part-${i2 + 1}` }));
           }
+        } else {
+          parts = etags.map((e2, i2) => ({ PartNumber: i2 + 1, ETag: e2! }));
         }
       }
-    } catch (e) {
-      if (String(e).includes('aborted')) { setPhase('idle'); setStageText('已取消'); return; }
-      setPhase('error');
-      setErrorMsg(errMsg(e));
-      try { await api.uploadCancel(uploadIdRef.current || '', keyRef.current).catch(() => {}); } catch { /* ignore */ }
-    }
-  }, [file, title, desc, catMain, catSub, sourceUrl, coverFile, subFiles, targetCollection, partTitle]);
 
-  const isBusy = phase === 'uploading' || phase === 'hashing';
-  if (!user) return null;
+      const done: any = await upload.complete({ uploadId, key, videoId, parts, ...meta });
+      setProgress(1);
+      const vid = done?.video ?? done;
+      setDoneVideo(vid || { id: videoId, title: meta.title } as Video);
+      setPhase('done');
+      toast('上传完成，视频进入审核', 'success');
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        setErr('已取消上传');
+      } else {
+        setErr(errMsg(e, '上传失败'));
+      }
+      setPhase('error');
+    } finally {
+    }
+  };
+
+  const cancelUpload = async () => {
+    setAborting(true);
+    abortRef.current?.abort();
+    try {
+      if (initInfo?.uploadId) await upload.cancel(initInfo.uploadId);
+    } catch { /* ignore */ }
+    setAborting(false);
+  };
+
+  /* ---------- 封面上传（完成后） ---------- */
+  const uploadCover = async (v: Video) => {
+    if (!v.id) return;
+    try {
+      let coverKey: string;
+      let coverUrl: string;
+      if (coverFile) {
+        coverKey = `covers/${v.id}/${Date.now()}_${coverFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        await upload.proxyPut(coverKey, coverFile, coverFile.type || 'image/jpeg');
+        coverUrl = `/api/videos/upload/proxy-put?key=`;
+        const r: any = await videos.coverUpdateKey(v.id, coverKey);
+        coverUrl = r?.cover_url || '';
+      } else if (coverPreview) {
+        // 自动截取的封面
+        const blob = await (await fetch(coverPreview)).blob();
+        const f2 = new File([blob], `cover_${v.id}.jpg`, { type: 'image/jpeg' });
+        coverKey = `covers/${v.id}/${Date.now()}_auto.jpg`;
+        await upload.proxyPut(coverKey, f2, 'image/jpeg');
+        const r: any = await videos.coverUpdateKey(v.id, coverKey);
+        coverUrl = r?.cover_url || '';
+      } else return;
+      setDoneVideo(x => x && { ...x, cover_url: coverUrl || x.cover_url });
+      toast('封面已更新', 'success');
+    } catch (e: any) {
+      toast(errMsg(e, '封面上传失败'), 'error');
+    }
+  };
+
+  /* ---------- 快速导入 ---------- */
+  const quickImport = async () => {
+    if (!/^https?:\/\/.+/.test(importUrl.trim())) { setErr('请输入有效的视频链接（如 B 站链接）'); return; }
+    setErr('');
+    setImporting(true);
+    try {
+      const r: any = await upload.quickImport({ source_url: importUrl.trim(), category: catLabel(catMain, catSub) });
+      toast(`导入成功${r?.pending_review ? '，等待审核' : ''}`, 'success');
+      nav('/me');
+    } catch (e: any) {
+      setErr(errMsg(e, '导入失败'));
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  /* ---------- 编辑模式：仅保存信息 / 换封面 ---------- */
+  const saveEdit = async () => {
+    if (!editId) return;
+    try {
+      const r: any = await videos.update(editId, {
+        title: title.trim(),
+        description: desc.trim(),
+        category: catLabel(catMain, catSub),
+        source_url: sourceUrl.trim(),
+      });
+      if (r?.moderation_warning) toast('已提交，但需注意：' + (r.moderation_opinion || '触发敏感词审核'), 'info');
+      toast('信息已更新', 'success');
+      if (coverFile || coverPreview) {
+        await uploadCover({ id: editId } as Video);
+      }
+      nav(`/video/${editId}`);
+    } catch (e: any) {
+      setErr(errMsg(e, '保存失败'));
+    }
+  };
+
+  /* ---------- 专栏 ---------- */
+  const publishArticle = async () => {
+    if (!artTitle.trim()) { setErr('请输入标题'); return; }
+    if (!artContent.trim()) { setErr('请输入内容'); return; }
+    setErr('');
+    setArtBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('title', artTitle.trim());
+      fd.append('content', artContent);
+      if (artCover) fd.append('cover', artCover);
+      artImages.forEach(f => fd.append('images[]', f));
+      const r: any = articleId ? await articles.edit(articleId, fd) : await articles.create(fd);
+      const id = r?.article?.id ?? r?.id ?? articleId;
+      toast(articleId ? '专栏已更新' : '专栏发布成功', 'success');
+      if (id) nav(`/article/${id}`);
+    } catch (e: any) {
+      setErr(errMsg(e, '发布失败'));
+    } finally {
+      setArtBusy(false);
+    }
+  };
+
+  const onArticleImages = (files: FileList | null) => {
+    if (!files) return;
+    const arr = [...files].filter(f => f.type.startsWith('image/') && f.size < 10 * 1024 * 1024);
+    setArtImages(prev => [...prev, ...arr]);
+  };
+
+  /* ---------- render ---------- */
+  if (phase === 'article') {
+    return (
+      <div className="page fade-in" style={{ maxWidth: 860 }}>
+        <h1 className="page-title row" style={{ gap: 8 }}>
+          <I name="newspaper" size={24} /> {articleId ? '编辑专栏' : '发布专栏'}
+        </h1>
+        <div className="card col" style={{ padding: 20, gap: 14 }}>
+          <Field label="标题">
+            <input value={artTitle} onChange={e => setArtTitle(e.target.value)} maxLength={100} placeholder="专栏标题" />
+          </Field>
+          <Field label="封面（可选）">
+            <div className="row" style={{ gap: 10 }}>
+              <Btn variant="tonal" size="sm" onClick={() => document.getElementById('art-cover-input')?.click()}><I name="image" size={15} /> 选择封面</Btn>
+              {artCover && <span className="muted small">{artCover.name}</span>}
+              <input id="art-cover-input" type="file" accept="image/*" style={{ display: 'none' }} onChange={e => setArtCover(e.target.files?.[0] || null)} />
+            </div>
+          </Field>
+          <Field label="正文（Markdown）" hint="支持 ![](图片) 语法；可先上传图片获得外链">
+            <textarea value={artContent} onChange={e => setArtContent(e.target.value)} style={{ minHeight: 320, fontFamily: 'var(--font-mono)', fontSize: 13.5 }} placeholder={'# 标题\n\n正文…\n\n![](图片链接)'} />
+          </Field>
+          <Field label={`插图（${artImages.length} 张，将上传后返回外链）`}>
+            <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <Btn variant="tonal" size="sm" onClick={() => document.getElementById('art-img-input')?.click()}><I name="plus" size={15} /> 添加图片</Btn>
+              <input id="art-img-input" type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => { onArticleImages(e.target.files); e.target.value = ''; }} />
+              {artImages.map((f, i) => (
+                <span key={i} className="chip">
+                  {f.name}
+                  <button className="icon-btn icon-btn--sm" style={{ width: 20, height: 20 }} onClick={() => setArtImages(x => x.filter((_, j) => j !== i))} aria-label="移除"><I name="x" size={12} /></button>
+                </span>
+              ))}
+            </div>
+          </Field>
+          {err && <div className="err">{err}</div>}
+          <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+            <Btn variant="text" onClick={() => nav(-1 as any)}>取消</Btn>
+            <Btn variant="filled" onClick={publishArticle} disabled={artBusy}>
+              {artBusy ? <Spinner size={16} /> : <I name="send" size={16} />} {articleId ? '保存' : '发布'}
+            </Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'done') {
+    return (
+      <div className="page fade-in" style={{ maxWidth: 640 }}>
+        <div className="card" style={{ padding: 30, textAlign: 'center' }}>
+          <div style={{ width: 72, height: 72, borderRadius: '50%', margin: '0 auto 16px', display: 'grid', placeItems: 'center', background: 'color-mix(in srgb, var(--md-success) 18%, transparent)', color: 'var(--md-success)' }}>
+            <I name="check" size={36} />
+          </div>
+          <h1 style={{ font: 'var(--text-headline-md)', marginBottom: 8 }}>上传完成</h1>
+          <p className="muted" style={{ marginBottom: 20 }}>视频已提交审核，审核通过后即可公开播放。</p>
+          <div className="row" style={{ gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {doneVideo?.id && <Btn variant="filled" onClick={() => nav(`/video/${doneVideo.id}`)}><I name="film" size={16} /> 查看视频</Btn>}
+            {(coverFile || coverPreview) && <Btn variant="tonal" onClick={() => uploadCover(doneVideo!)}><I name="camera" size={16} /> {coverFile ? '上传选择封面' : '使用自动封面'}</Btn>}
+            {doneVideo?.id && myCols.length > 0 && (
+              <select className="field" style={{ background: 'var(--md-surface-container)', border: '1px solid var(--md-outline-variant)', borderRadius: 999, padding: '0 14px', height: 40, color: 'var(--md-on-surface)' }} defaultValue="" onChange={async e => {
+                const cid = e.target.value;
+                if (!cid) return;
+                try {
+                  await collections.addItem(cid, { video_id: doneVideo!.id, part_title: title, sort_order: 999 });
+                  toast('已加入合集', 'success');
+                } catch (e2: any) { toast(errMsg(e2), 'error'); }
+              }}>
+                <option value="" disabled>加入合集…</option>
+                {myCols.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            )}
+            <Btn variant="text" onClick={() => nav('/me')}>我的视频</Btn>
+            <Btn variant="text" onClick={() => nav('/')}>回首页</Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="page" style={{ maxWidth: 760, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 22 }}><I name="plus" size={20} /> 投稿视频</h1>
+    <div className="page fade-in" style={{ maxWidth: 760 }}>
+      <h1 className="page-title row" style={{ gap: 8 }}>
+        <I name={editId ? 'edit' : 'upload'} size={24} /> {editId ? '编辑视频' : '发布视频'}
+      </h1>
 
       {/* 快速导入 */}
-      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}><I name="zap" size={15} /> 快速导入（B站视频链接）</div>
-        <div className="flex">
-          <input
-            type="text" value={quickUrl} onChange={(e) => setQuickUrl(e.target.value)}
-            placeholder="粘贴 bilibili.com 视频链接"
-            style={{ flex: 1, padding: '9px 12px', border: '1px solid var(--line)', borderRadius: 10, background: 'var(--bg)', color: 'var(--ink)', minWidth: 0 }}
-          />
-          <button className="btn btn-sm" disabled={quickBusy || !quickUrl.trim()} onClick={quickImport}>{quickBusy ? '导入中…' : '一键导入'}</button>
-        </div>
-        <div className="hint">导入的视频将自动进入审核队列</div>
-      </div>
-
-      {/* 文件选择 */}
-      <div
-        className="card"
-        style={{ padding: 20, marginBottom: 16, textAlign: 'center', borderStyle: file ? 'solid' : 'dashed', cursor: 'pointer' }}
-        onClick={() => !file && fileInput.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) onPickFile(f); }}
-      >
-        {file ? (
-          <div>
-            <div style={{ fontWeight: 700 }}>{file.name}</div>
-            <div className="muted">{fmtSize(file.size)} · {file.type || 'video'}</div>
-            <button className="btn btn-sm btn-ghost" style={{ marginTop: 8 }} onClick={(e) => { e.stopPropagation(); setFile(null); setPhase('idle'); setProgress(0); }}>重新选择</button>
+      {!editId && phase !== 'uploading' && (
+        <div className="card" style={{ padding: 16 }}>
+          <div className="row" style={{ gap: 8, marginBottom: 10 }}>
+            <I name="zap" size={17} style={{ color: 'var(--md-tertiary)' }} />
+            <b style={{ font: 'var(--text-title-sm)' }}>快速导入</b>
+            <span className="muted small">粘贴 B 站等外部视频链接，一键导入</span>
           </div>
-        ) : (
-          <div>
-            <div style={{ display: 'flex', marginBottom: 6 }}><I name="video" size={34} /></div>
-            <div style={{ fontWeight: 600 }}>点击选择或拖拽视频文件到此处</div>
-            <div className="hint">支持 MP4 / WebM / MOV，最大 15GB，时长 ≤ 2 小时</div>
+          <div className="row" style={{ gap: 8 }}>
+            <input value={importUrl} onChange={e => setImportUrl(e.target.value)} placeholder="https://www.bilibili.com/video/BV..." style={{ flex: 1, height: 40, borderRadius: 999, border: '1px solid var(--md-outline-variant)', background: 'var(--glass-1)', padding: '0 16px', color: 'var(--md-on-surface)' }} />
+            <Btn variant="tonal" onClick={quickImport} disabled={importing}>{importing ? <Spinner size={15} /> : <I name="download" size={15} />} 导入</Btn>
           </div>
-        )}
-        <input ref={fileInput} type="file" accept="video/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ''; }} />
-      </div>
-
-      {existingVideo && (
-        <div className="notice-banner" style={{ marginBottom: 16 }}>
-          检测到相同文件已上传：<a href={'/video/' + existingVideo.id} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-2)' }}>{existingVideo.title}</a>
+          <hr className="divider" />
         </div>
       )}
 
-      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-        <div className="field">
-          <label>标题 *</label>
-          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} placeholder="给视频起个标题" disabled={!!resultVideo} />
-        </div>
-        <div className="field">
-          <label>简介</label>
-          <textarea value={desc} onChange={(e) => setDesc(e.target.value)} maxLength={2000} placeholder="介绍一下你的视频…" disabled={!!resultVideo} />
-        </div>
-        <div className="field">
-          <label>分类</label>
-          <div className="flex">
-            <select value={catMain} onChange={(e) => { setCatMain(e.target.value); setCatSub((CATEGORIES[e.target.value] || ['其他'])[0]); }} style={{ flex: 1, padding: '9px 10px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--ink)' }}>
-              {Object.keys(CATEGORIES).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <select value={catSub} onChange={(e) => setCatSub(e.target.value)} style={{ flex: 1, padding: '9px 10px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--ink)' }}>
-              {(CATEGORIES[catMain] || ['其他']).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+      {/* 选择文件 */}
+      {phase === 'pick' && (
+        <div
+          className={`upload-drop ${drag ? 'drag' : ''}`}
+          onDragOver={e => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={e => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files?.[0] || null); }}
+        >
+          <div style={{ width: 72, height: 72, borderRadius: 22, display: 'grid', placeItems: 'center', background: 'var(--md-primary-container)', color: 'var(--md-on-primary-container)' }}>
+            <I name="film" size={34} />
           </div>
+          <div style={{ font: 'var(--text-title-md)' }}>拖拽视频文件到此处，或</div>
+          <Btn variant="filled" onClick={() => document.getElementById('zz-file')?.click()}>
+            <I name="upload" size={17} /> 选择文件
+          </Btn>
+          <input id="zz-file" type="file" accept="video/*" style={{ display: 'none' }} onChange={e => { pickFile(e.target.files?.[0] || null); e.target.value = ''; }} />
+          <div className="muted small">MP4 / WebM / MKV(MP4 兼容性最佳) · ≤15GB · ≤2 小时 · 支持 SHA-256 秒传</div>
         </div>
-        <div className="field">
-          <label>原始来源链接（可选）</label>
-          <input type="text" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="https://…" disabled={!!resultVideo} />
-        </div>
-        <div className="field">
-          <label>封面（可选，不填将自动截取）</label>
-          <div className="flex wrap">
-            {coverUrl && <img src={coverUrl} alt="" style={{ width: 150, borderRadius: 10 }} />}
-            <CoverPick onPick={(f) => { setCoverFile(f); setCoverUrl(URL.createObjectURL(f)); }} />
-          </div>
-        </div>
-        <div className="field">
-          <label>字幕文件（可选，可多选 vtt/srt/ass）</label>
-          <SubPick files={subFiles} onChange={setSubFiles} />
-        </div>
-        <div className="field">
-          <label>加入合集（可选）</label>
-          <div className="flex">
-            <select value={targetCollection} onChange={(e) => setTargetCollection(e.target.value)} style={{ flex: 1, padding: '9px 10px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--ink)' }}>
-              <option value="">不加入合集</option>
-              {collections.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-            </select>
-            {targetCollection && <input type="text" value={partTitle} onChange={(e) => setPartTitle(e.target.value)} placeholder="分P标题" style={{ flex: 1, padding: '9px 10px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--ink)', minWidth: 0 }} />}
-          </div>
-        </div>
-      </div>
+      )}
 
-      {phase === 'error' && <div className="notice-banner" style={{ color: 'var(--err)' }}>{errorMsg}</div>}
-
-      {phase === 'done' && resultVideo ? (
-        <div className="card" style={{ padding: 20, textAlign: 'center' }}>
-          <div style={{ display: 'flex', justifyContent: 'center', color: 'var(--ok)' }}><I name="check" size={44} /></div>
-          <div style={{ fontWeight: 700, fontSize: 17, marginTop: 6 }}>上传成功！</div>
-          <div className="muted" style={{ margin: '6px 0 14px' }}>视频已提交审核，审核通过后即可公开观看</div>
-          <div className="flex" style={{ justifyContent: 'center' }}>
-            <button className="btn" onClick={() => nav('/')}>返回首页</button>
-            <button className="btn btn-primary" onClick={() => nav(`/video/${resultVideo.id}`)}>查看视频</button>
+      {/* 填写信息 */}
+      {(phase === 'meta' || phase === 'hashing' || phase === 'uploading') && file && (
+        <div className="card col" style={{ padding: 20, gap: 14 }}>
+          <div className="upload-file-meta">
+            <span className="uicon"><I name="film" size={24} /></span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="clamp1" style={{ font: 'var(--text-title-sm)' }}>{file.name}</div>
+              <div className="muted small">{fmtBytes(file.size)}{file.type ? ` · ${file.type}` : ''}</div>
+            </div>
           </div>
-        </div>
-      ) : (
-        <div>
-          {file && (
-            <div className="progress" style={{ marginBottom: 10 }}>
-              <div style={{ width: progress + '%' }} />
+
+          <Field label="标题 *">
+            <input value={title} onChange={e => setTitle(e.target.value)} maxLength={100} placeholder="给视频起个标题" />
+          </Field>
+          <Field label="简介">
+            <textarea value={desc} onChange={e => setDesc(e.target.value)} maxLength={4000} placeholder="介绍一下你的视频（可选）" />
+          </Field>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <Field label="分类"><select value={catMain} onChange={e => { setCatMain(e.target.value); setCatSub(CATEGORIES[e.target.value]?.[0] || ''); }} style={{ minWidth: 130 }}>{CATEGORY_NAMES.map(c => <option key={c}>{c}</option>)}</select></Field>
+            <Field label="子类"><select value={catSub} onChange={e => setCatSub(e.target.value)} style={{ minWidth: 130 }}>{(CATEGORIES[catMain] || []).map(c => <option key={c}>{c}</option>)}</select></Field>
+          </div>
+          <Field label="原始链接（可选）" hint="B 站 / YouTube 等原始地址">
+            <input value={sourceUrl} onChange={e => setSourceUrl(e.target.value)} placeholder="https://…" />
+          </Field>
+
+          {!editId && (
+            <div className="col" style={{ gap: 8 }}>
+              <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+                <span style={{ font: 'var(--text-label-lg)', width: 70 }}>封面</span>
+                <Btn variant="tonal" size="sm" onClick={() => document.getElementById('zz-cover')?.click()}><I name="camera" size={15} /> 选择封面图</Btn>
+                <input id="zz-cover" type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) { setCoverFile(f); setCoverPreview(f ? URL.createObjectURL(f) : ''); } }} />
+                <label className="row" style={{ gap: 6, cursor: 'pointer' }}>
+                  <Switch checked={autoCover} onChange={setAutoCover} label="自动截取封面" />
+                  <span className="small muted">自动从视频截取封面</span>
+                </label>
+              </div>
+              {coverPreview && (
+                <div style={{ position: 'relative', width: 220, borderRadius: 12, overflow: 'hidden' }}>
+                  <img src={coverPreview} alt="封面预览" style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover' }} />
+                  {coverFile && <span className="live-tag" style={{ position: 'absolute', left: 8, top: 8 }}>自定义</span>}
+                </div>
+              )}
             </div>
           )}
-          <div className="flex between">
-            <span className="muted">{stageText || ''} {hash ? <span className="mono">#{hash.slice(0, 12)}…</span> : null}</span>
-            {isBusy ? (
-              <button className="btn btn-danger btn-sm" onClick={() => abortRef.current?.abort()}>取消上传</button>
+
+          {err && <div className="err">{err}</div>}
+
+          {phase === 'hashing' && (
+            <div className="upload-step active">
+              <span className="step-dot"><Spinner size={14} /></span>
+              <span>正在计算 SHA-256（用于秒传检测）…</span>
+            </div>
+          )}
+          {phase === 'uploading' && (
+            <div className="col" style={{ gap: 8 }}>
+              <div className="upload-step active">
+                <span className="step-dot"><Spinner size={14} /></span>
+                <span style={{ font: 'var(--text-label-lg)' }}>正在上传 {Math.round(progress * 100)}%</span>
+                <span className="muted small">{fmtBytes(file.size * progress)} / {fmtBytes(file.size)}</span>
+              </div>
+              <Progress value={progress * 100} />
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <Btn variant="text" onClick={cancelUpload} disabled={aborting}>{aborting ? '取消中…' : '取消上传'}</Btn>
+              </div>
+            </div>
+          )}
+
+          <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+            {!editId && <Btn variant="text" onClick={() => { setFile(null); setPhase('pick'); }}>← 重新选择文件</Btn>}
+            {editId ? (
+              <Btn variant="filled" size="lg" onClick={saveEdit}><I name="check" size={18} /> 保存修改</Btn>
             ) : (
-              <button className="btn btn-primary" disabled={!file || !title.trim() || isBusy} onClick={startUpload}>
-                {file ? '开始上传' : '请先选择视频'}
-              </button>
+              <Btn variant="filled" size="lg" onClick={publish} disabled={phase !== 'meta'}>
+                <I name="upload" size={18} /> 开始上传
+              </Btn>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 失败 */}
+      {phase === 'error' && (
+        <div className="card" style={{ padding: 30, textAlign: 'center' }}>
+          <I name="xCircle" size={40} style={{ color: 'var(--md-error)', margin: '0 auto 14px' }} />
+          <div style={{ font: 'var(--text-title-md)', marginBottom: 8 }}>上传失败</div>
+          <p className="muted" style={{ marginBottom: 18 }}>{err}</p>
+          <div className="row" style={{ gap: 8, justifyContent: 'center' }}>
+            <Btn variant="tonal" onClick={() => setPhase(file ? 'meta' : 'pick')}><I name="refresh" size={16} /> 重试</Btn>
+            <Btn variant="text" onClick={() => nav('/me')}>返回</Btn>
           </div>
         </div>
       )}
     </div>
   );
 }
-
-function CoverPick({ onPick }: { onPick: (f: File) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  return (
-    <>
-      <button className="btn btn-sm" onClick={() => ref.current?.click()}>选择封面图</button>
-      <input ref={ref} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ''; }} />
-    </>
-  );
-}
-
-function SubPick({ files, onChange }: { files: File[]; onChange: (f: File[]) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  return (
-    <>
-      <button className="btn btn-sm" onClick={() => ref.current?.click()}>选择字幕文件</button>
-      {files.length > 0 && <span className="muted" style={{ marginLeft: 8 }}>{files.map((f) => f.name).join(', ')}</span>}
-      <input ref={ref} type="file" multiple accept=".vtt,.srt,.ass" style={{ display: 'none' }} onChange={(e) => { onChange([...files, ...Array.from(e.target.files || [])]); e.target.value = ''; }} />
-    </>
-  );
-}
-
-
