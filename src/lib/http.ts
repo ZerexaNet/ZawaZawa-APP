@@ -22,6 +22,7 @@ export interface ReqOpts {
   signal?: AbortSignal;
   raw?: boolean; // return Response (for binary)
   form?: boolean; // send FormData (do not set json content-type)
+  textType?: string; // send string body as raw text with this Content-Type (e.g. 'application/xml')
   retries?: number;
 }
 
@@ -35,9 +36,12 @@ export async function request<T = any>(
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
   if (opts.captchaToken) headers['X-Turnstile-Token'] = opts.captchaToken;
+  const isRawText = !!opts.textType && typeof body === 'string';
   if (body !== undefined) {
     if (opts.form || body instanceof FormData) {
       if (!(body instanceof FormData)) throw new Error('form=true requires FormData');
+    } else if (isRawText) {
+      headers['Content-Type'] = opts.textType!;
     } else {
       headers['Content-Type'] = 'application/json';
     }
@@ -48,7 +52,7 @@ export async function request<T = any>(
       method,
       headers,
       credentials: 'include',
-      body: body === undefined ? undefined : opts.form || body instanceof FormData ? body : JSON.stringify(body),
+      body: body === undefined ? undefined : opts.form || body instanceof FormData ? body : isRawText ? body : JSON.stringify(body),
       signal: opts.signal,
     });
 

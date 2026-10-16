@@ -27,25 +27,24 @@ export default function FollowingFeedPage() {
 
   const inf = useInfinite(onLoad, [user?.id]);
 
-  if (list.length === 0 && !inf.loading) {
-    return (
-      <div className="page fade-in">
-        <h1 className="page-title row" style={{ gap: 8 }}><I name="users" size={24} /> 关注动态</h1>
-        <Empty icon="users" title="关注流为空" desc="关注一些创作者后，他们的新视频会出现在这里" />
-        <div className="center"><Btn variant="filled" onClick={() => nav('/search?q=')}>去发现创作者</Btn></div>
-      </div>
-    );
-  }
-
   return (
     <div className="page fade-in">
       <div className="section-head">
         <h1 className="page-title row" style={{ gap: 8 }}><I name="users" size={24} /> 关注动态</h1>
         {total >= 0 && <span className="muted small">{total} 条更新</span>}
       </div>
-      <div className="video-grid">
-        {list.map(v => <VideoCard key={v.id} v={v} />)}
-      </div>
+      {list.length > 0 && (
+        <div className="video-grid">
+          {list.map(v => <VideoCard key={v.id} v={v} />)}
+        </div>
+      )}
+      {list.length === 0 && !inf.loading && (
+        <>
+          <Empty icon="users" title="关注流为空" desc="关注一些创作者后，他们的新视频会出现在这里" />
+          <div className="center"><Btn variant="filled" onClick={() => nav('/search?q=')}>去发现创作者</Btn></div>
+        </>
+      )}
+      {/* sentinel 必须常驻：空态分支若卸载它，IntersectionObserver 永不触发首次加载 */}
       {inf.sentinelEl}
       {inf.loading && <Loading text="加载更多…" />}
       {!inf.loading && inf.done && list.length > 0 && <div className="center muted small" style={{ padding: 16 }}>— 已经到底了 —</div>}

@@ -25,7 +25,7 @@ export default function ReferendumsPage() {
 
   const vote = async () => {
     if (!openPoll || !choice || voting) return;
-    if (openPoll.allow_text && !textAnswer.trim()) { toast('请填写文字回答', 'info'); return; }
+    // 文字回答是可选的（allow_text 仅表示“允许”填写，接口 text_answer 可选）
     setVoting(true);
     try {
       await referendums.respond(openPoll.id, { option_id: choice, text_answer: textAnswer.trim() || undefined });
