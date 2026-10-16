@@ -1,16 +1,17 @@
 {
-  "name": "ZawaZawa",
+  "name": "ZawaZawa 客户端",
   "short_name": "ZawaZawa",
-  "description": "ZawaZawa 全平台视频客户端",
+  "description": "ZawaZawa 全平台视频社区客户端",
+  "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#101014",
-  "theme_color": "#101014",
-  "lang": "zh-CN",
+  "background_color": "#141218",
+  "theme_color": "#141218",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }

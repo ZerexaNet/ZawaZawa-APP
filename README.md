@@ -1,6 +1,6 @@
 # ZawaZawa 全平台客户端
 
-ZawaZawa（zawa.uk）的全平台客户端。React 19 + TypeScript + Vite，桌面端基于 Electron，移动端基于 Capacitor，与官方站点同后端（`www.zawa.uk` API）。
+ZawaZawa（zawa.uk）的全平台客户端。React 19 + TypeScript + Vite，桌面端基于 Electron，移动端基于 Capacitor，Web 端为可安装的 PWA，与官方站点同后端（`www.zawa.uk` API）。
 
 ## 发布平台（GitHub Actions 自动构建）
 
@@ -10,20 +10,21 @@ ZawaZawa（zawa.uk）的全平台客户端。React 19 + TypeScript + Vite，桌�
 | macOS | dmg / zip（Universal） | 未签名，首启右键→打开 |
 | Linux | AppImage / deb | |
 | Android | APK / AAB | 当前 debug 签名（可安装，不可上架 Play） |
+| Web | PWA | manifest + Service Worker，可安装到桌面/主屏 |
 | iOS | — | 需 Apple 开发者账号 + 证书/描述文件，暂未接入 |
 
 推 `main` → 更新 `dev` 预发布；打 `v*.*.*` tag → 正式 release（版本号跟随 tag）。
 
 ## 功能
 
-- **视频**：播放（多 CDN 容灾）、弹幕（发送/开关/密度/透明度）、点赞/投币/收藏/困惑/举报、AI 字幕、字幕上传（vtt/srt/ass）、弹幕导入导出（XML）
-- **投稿**：本地视频上传 + B 站链接快速导入
-- **社区**：关注/粉丝、私信、站内信、工单、公告、社区公投、何意味榜、热门榜、专栏（Markdown）
-- **账号**：统一登录（用户名/邮箱 + 密码 + 极验 v4 人机验证）、邮箱验证/换绑、密码找回、账号注销、GDPR 数据导出
-- **会员**：粉V 会员（支付宝当面付，发票）、资质认证（粉/黄/蓝标）
-- **管理后台**：审核队列、举报处理、评论审核、认证审核、工单、用户管理、视频管理（含地区屏蔽 geo_block 开关）、公告、公投、消息推送
-- **主题**：明/暗两套 × 三种界面风格（官网默认 / Win8 磁贴 / Material 3），顶栏一键切换并持久化
-- **地区屏蔽**：后端对 `geo_block: CN` 的视频返回 HTTP 451，客户端显示专属"地区限制"提示页
+- **视频**：播放（多 CDN 容灾）、canvas 弹幕引擎（发送/密度/透明度/XML 导入导出/点击跳转）、VTT/SRT/ASS 字幕 + AI 字幕生成、倍速/PiP/全屏/快捷键、点赞/投币/收藏/困惑/举报、不感兴趣、观看历史（进度恢复）、地区屏蔽（451）专属提示页
+- **投稿**：SHA-256 秒传检测 + 分片上传（10MB × 4 并发、重试、直传/代理回退）、封面自动截取（canvas@20s）或手动上传、B 站等外链快速导入
+- **社区**：关注/粉丝/互关、私信、通知、评论（楼中楼 + 机器翻译）、专栏（Markdown）、动态（9 图）、合集、社区公投（投票/结果/CSV）、何意味榜（日/周/月/年）、热门榜、工单
+- **账号**：统一登录（用户名/邮箱 + 密码 + Geetest v4 + Turnstile 双验证）、邮箱验证、密码找回、账号注销（邮箱码确认）、GDPR 数据导出
+- **会员**：粉V 会员（Stripe / 微信 / 支付宝 checkout，pending 确认/取消、Portal）
+- **认证**：实名认证材料提交（黄V/蓝V）
+- **管理后台**：审核队列、举报处理、评论审核、认证审核、工单、用户管理（含拉黑/权限）、视频管理（含 geo_block）、公告、公投、消息推送 —— 按角色自动过滤
+- **主题**：单一 Google Material 3 + Liquid Glass 主题（暗色紫罗兰 token 体系；`backdrop-filter` 仅 5 处表面，列表卡片 glass-lite 零模糊开销，性能优先）
 
 ## 构建
 
@@ -41,6 +42,9 @@ npm run build:web
 npx cap sync android
 cd android && ./gradlew assembleRelease bundleRelease
 # 产物: android/app/build/outputs/apk/release/app-release.apk, outputs/bundle/release/app-release.aab
+
+# Web（PWA）
+npm run build   # 产物 dist/，任意静态托管；/api 需同源或反代到 www.zawa.uk
 ```
 
 > 国内网络构建 Electron 时需配置镜像：
@@ -50,18 +54,18 @@ cd android && ./gradlew assembleRelease bundleRelease
 
 ```
 src/
-  api.ts            # REST 客户端（全部端点 + ApiError 状态码）
+  main.tsx          # 入口（SW 注册）
+  App.tsx           # 路由（Web BrowserRouter / Electron file:// 自动切 HashRouter）
+  api.ts            # REST 客户端（135+ 端点 + ApiError 状态码）
   types.ts          # 后端 DTO 类型
-  store.ts          # 全局状态（用户/主题/Toast）
-  icons.tsx         # 线性 SVG 图标库
-  captcha.tsx       # 极验 v4 float 封装
-  Player.tsx        # 视频播放器（弹幕层 + 多 CDN 切换 + 10s 无数据超时）
-  components.tsx    # 顶栏/底栏/卡片/评论/弹窗等公共组件
-  lib/utils.ts      # CDN 容灾链（R2/S3）、封面回退、工具函数
-  lib/danmaku.ts    # 弹幕引擎
-  lib/markdown.ts   # Markdown 渲染（含安全白名单）
-  pages/            # 各路由页面
+  store/            # 全局状态（auth / toast / UI）
+  components/       # Shell（顶栏/底栏）、Player（弹幕+字幕）、UI 组件
+  lib/              # 工具、CDN 容灾链、弹幕引擎、Markdown、分类树
+  pages/            # 28 个路由页面（懒加载）
+public/             # PWA manifest / sw.js / 图标
 electron/main.cjs   # Electron 主进程（窗口 + 应用内更新检查）
+android/            # Capacitor Android 壳
+.github/workflows/  # CI：tag→正式 release，无 tag→dev 预发布
 ```
 
 ## 媒体容灾策略
@@ -69,3 +73,7 @@ electron/main.cjs   # Electron 主进程（窗口 + 应用内更新检查）
 - **视频流**：接口主地址 → R2（bsbucket/bucket/eobucket.video.hkmc.online，ESA 阿里云 CDN 边缘）→ 雨云 S3（上海 → 港澳 → 悉尼）。任一档出错或 10 秒无数据自动切下一档
 - **封面**：R2 直链优先（key 与 S3 相同：`covers/<id>/<file>`），逐档回退至后端代理 `/api/s3/object`
 - **地区屏蔽**：播放地址不可达 ≠ 地区屏蔽。451 由后端按访问者 IP 判定，客户端展示专属提示，不走容灾
+
+## API 参考
+
+`docs/api-reference.md` — 后端 135 个端点的结构化参考（参数/响应/错误码）。
