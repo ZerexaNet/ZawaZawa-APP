@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { I } from './icons';
 import { useToast } from '../store/toast';
-import { avatarUrl } from '../lib/util';
+import { avatarUrl, fallbackAvatar } from '../lib/util';
 import type { Badge } from '../lib/types';
 
 /* ---------- Buttons ---------- */
@@ -25,7 +25,10 @@ export function IconBtn({ name, label, active, size, className = '', ...rest }: 
 /* ---------- Avatar & badges ---------- */
 export function Avatar({ user, size = 36, className = '' }: { user: any; size?: number; className?: string }) {
   const [err, setErr] = useState(false);
-  const url = err ? '' : avatarUrl(user, size);
+  // 用户变化时重置错误态（否则会一直显示上一个用户的回退头像）
+  useEffect(() => { setErr(false); }, [user?.id, user?.avatar_url, user?.gravatar_url]);
+  // 远程头像加载失败 → 本地生成头像（不能把失败的 URL 再塞回去）
+  const url = err ? fallbackAvatar(user?.username) : avatarUrl(user, size);
   return (
     <img
       className={`avatar ${size <= 30 ? 'avatar--sm' : size >= 80 ? 'avatar--lg' : ''} ${className}`}
@@ -35,7 +38,6 @@ export function Avatar({ user, size = 36, className = '' }: { user: any; size?: 
       loading="lazy"
       decoding="async"
       onError={() => setErr(true)}
-      ref={el => { if (el && err) el.src = avatarUrl(user, size); }}
     />
   );
 }

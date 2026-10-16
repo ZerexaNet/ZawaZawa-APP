@@ -26,8 +26,13 @@ export default function AdminPage() {
   const nav = useNavigate();
   const user = useAuth(s => s.user);
   const role = user?.role || '';
-  const [tab, setTab] = useState('audit');
   const visible = TABS.filter(t => t.roles.includes(role) || role === 'admin');
+  const [tab, setTab] = useState(visible[0]?.key || 'audit');
+
+  // 角色解析完成/变化后，若当前 tab 不可见则切回第一个可见 tab（避免越权请求）
+  useEffect(() => {
+    if (visible.length && !visible.some(t => t.key === tab)) setTab(visible[0].key);
+  }, [role]); // eslint-disable-line
 
   if (!user) return <RedirectLogin />;
   if (!['admin', 'video_moderation', 'content_review'].includes(role)) {

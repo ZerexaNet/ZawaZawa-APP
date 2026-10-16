@@ -173,8 +173,8 @@ export default function VideoPage() {
   const commentHandlers = useMemo(() => ({
     list: (l: number, o: number) => videos.comments(id!, l, o),
     post: (c: string, p?: string) => videos.commentPost(id!, c, p),
-    like: (cid: string) => videos.commentLike(id!, cid),
-    remove: (cid: string) => videos.commentDelete(id!, cid),
+    like: (cid: string) => videos.commentLike(cid),
+    remove: (cid: string) => videos.commentDelete(cid),
   }), [id]);
 
   const canDeleteComment = useCallback((c: Comment) => {

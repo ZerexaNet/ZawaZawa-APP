@@ -76,7 +76,7 @@ export class DanmakuEngine {
 
   clear() {
     this.items = [];
-    for (const it of this.pool) this.free(it);
+    // 池中项已是空闲状态，直接保留复用（不能在遍历 pool 时向 pool push，否则死循环）
     this.laneFreeTop = Array(TOP_LANES).fill(Infinity);
     this.laneFreeBot = Array(BOT_LANES).fill(Infinity);
     this.ctx.clearRect(0, 0, this.W, this.H);
@@ -156,7 +156,8 @@ export class DanmakuEngine {
     if (best && this.onSeek) this.onSeek(best.time);
   };
 
-  frame(ts: number) {
+  // 箭头函数：requestAnimationFrame 回调不带 this，原型方法会丢 this
+  frame = (ts: number) => {
     this.raf = requestAnimationFrame(this.frame);
     if (!this.W) { this.resize(); return; }
     const dt = Math.min(0.1, (ts - (this.last || ts)) / 1000);

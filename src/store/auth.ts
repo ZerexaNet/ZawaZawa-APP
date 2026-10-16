@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { auth, users, messages } from '../lib/api';
 import type { User } from '../lib/types';
+import { goto } from '../lib/util';
 
 interface AuthState {
   user: User | null;
@@ -49,9 +50,9 @@ export const useAuth = create<AuthState>((set, get) => ({
       if (user) {
         localStorage.setItem(LS_USER, JSON.stringify(user));
         get().refreshUnread();
-        // 定期刷新未读数
-        if ((get() as any)._unsub) (get() as any)._unsub();
-        (get() as any)._unsub = setInterval(() => {
+        // 定期刷新未读数（浏览器 setInterval 返回 number，必须用 clearInterval）
+        if ((get() as any)._timer) { clearInterval((get() as any)._timer); (get() as any)._timer = 0; }
+        (get() as any)._timer = window.setInterval(() => {
           if (!document.hidden) get().refreshUnread();
         }, 60000);
       }
@@ -81,25 +82,32 @@ export const useAuth = create<AuthState>((set, get) => ({
   },
   logout: async () => {
     try { await auth.logout(); } catch { /* ignore */ }
+    if ((get() as any)._timer) { clearInterval((get() as any)._timer); (get() as any)._timer = 0; }
     set({ user: null, msgUnread: 0 });
     localStorage.removeItem(LS_USER);
   },
 }));
 
 // 全局 401 / 403 拦截
+// 注意：Electron file:// 下 location.href='/login' 会变成 file:///login，必须走 goto()
+const onLoginPage = () =>
+  window.location.protocol === 'file:'
+    ? location.hash.startsWith('#/login')
+    : ['/login', '/register'].includes(location.pathname);
+
 window.addEventListener('zzw:unauthorized', () => {
   const st = useAuth.getState();
   if (st.user) {
     st.setUser(null);
-    if (!['/login', '/register'].includes(window.location.pathname)) {
-      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
+    if (!onLoginPage()) {
+      goto('/login?next=' + encodeURIComponent(location.pathname + location.search));
     }
   }
 });
 window.addEventListener('zzw:banned', () => {
   useAuth.getState().setBanned(true);
   useAuth.getState().setUser(null);
-  if (!location.pathname.startsWith('/login')) {
-    location.href = '/login?authError=' + encodeURIComponent('账号已被封禁');
+  if (!onLoginPage()) {
+    goto('/login?authError=' + encodeURIComponent('账号已被封禁'));
   }
 });

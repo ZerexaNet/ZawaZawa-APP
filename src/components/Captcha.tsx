@@ -84,7 +84,7 @@ export function CaptchaBox({
     return () => { cancelled = true; };
   }, [cfg?.geetest_enabled, cfg?.geetest_captcha_id]);
 
-  // 初始化 Turnstile
+  // 初始化 Turnstile（turnstileOk 变化时重建：重置后容器是全新节点，需要重新 render）
   useEffect(() => {
     if (!cfg?.turnstile_enabled || !tsRef.current) return;
     let cancelled = false;
@@ -114,7 +114,8 @@ export function CaptchaBox({
         setErr('Turnstile 加载失败，请检查网络');
       }
     })();
-  }, [cfg?.turnstile_enabled]);
+    return () => { cancelled = true; };
+  }, [cfg?.turnstile_enabled, turnstileOk]);
 
   // 触发 geetest 浮层
   const startGeetest = useCallback(async () => {

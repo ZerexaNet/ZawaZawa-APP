@@ -26,19 +26,28 @@ export default function Home() {
   }, []);
   useEffect(() => { loadArt(); }, [loadArt]);
 
+  const [loadStatus, setLoadStatus] = useState<'idle' | 'ok' | 'error'>('idle');
+  const [retry, setRetry] = useState(0);
+
   const onLoad = useCallback(async () => {
-    const offset = videosList.length;
-    const d: any = await videos.list({ category: cat, sort, limit: 24, offset });
-    const items = asList<Video>(d);
-    setTotal(asTotal(d, -1));
-    setVideosList(prev => [...prev, ...items.filter(v => !prev.some(p => p.id === v.id))]);
-    return items.length > 0;
+    try {
+      const offset = videosList.length;
+      const d: any = await videos.list({ category: cat, sort, limit: 24, offset });
+      const items = asList<Video>(d);
+      setTotal(asTotal(d, -1));
+      setVideosList(prev => [...prev, ...items.filter(v => !prev.some(p => p.id === v.id))]);
+      setLoadStatus('ok');
+      return items.length > 0;
+    } catch {
+      setLoadStatus('error');
+      return false;
+    }
   }, [cat, sort, videosList.length]);
 
-  const inf = useInfinite(onLoad, [cat, sort]);
+  const inf = useInfinite(onLoad, [cat, sort, retry]);
 
   // 切换分类/排序时重置
-  useEffect(() => { setVideosList([]); }, [cat, sort]);
+  useEffect(() => { setVideosList([]); setLoadStatus('idle'); }, [cat, sort]);
 
   return (
     <div className="page fade-in">
@@ -58,13 +67,28 @@ export default function Home() {
         ))}
       </div>
 
-      {videosList.length === 0 && !inf.loading ? (
-        <div className="col" style={{ gap: 10 }}>
-          {[0, 1, 2, 3].map(i => <Skeleton key={i} w="100%" h={300} r={18} />)}
-        </div>
-      ) : (
+      {videosList.length > 0 ? (
         <div className="video-grid">
           {videosList.map(v => <VideoCard key={v.id} v={v} />)}
+        </div>
+      ) : loadStatus === 'error' ? (
+        <div className="col" style={{ gap: 12, alignItems: 'center', padding: '60px 0' }}>
+          <I name="alert" size={40} className="muted" />
+          <div style={{ font: 'var(--text-title-sm)' }}>加载失败</div>
+          <p className="muted small" style={{ margin: 0 }}>网络异常或接口无响应</p>
+          <button className="btn btn--tonal btn--sm" onClick={() => { setVideosList([]); setLoadStatus('idle'); setRetry(r => r + 1); }}>
+            <I name="refresh" size={15} /> 重试
+          </button>
+        </div>
+      ) : loadStatus === 'ok' ? (
+        <div className="col" style={{ gap: 12, alignItems: 'center', padding: '60px 0' }}>
+          <I name="film" size={40} className="muted" />
+          <div style={{ font: 'var(--text-title-sm)' }}>暂无内容</div>
+          <p className="muted small" style={{ margin: 0 }}>该分类 / 排序下暂时没有视频</p>
+        </div>
+      ) : (
+        <div className="col" style={{ gap: 10 }}>
+          {[0, 1, 2, 3].map(i => <Skeleton key={i} w="100%" h={300} r={18} />)}
         </div>
       )}
       {inf.sentinelEl}

@@ -7,7 +7,7 @@ import { I } from '../components/icons';
 import { useAuth } from '../store/auth';
 import { useToast, errMsg } from '../store/toast';
 import { CATEGORIES, CATEGORY_NAMES, catLabel } from '../lib/categories';
-import { fmtBytes, sha256Hex } from '../lib/util';
+import { fmtBytes, sha256File } from '../lib/util';
 
 const PART_SIZE = 10 * 1024 * 1024;
 const CONCURRENCY = 4;
@@ -74,9 +74,13 @@ export default function Upload() {
     }).catch(e => { setErr(errMsg(e)); setPhase('error'); });
   }, [editId]);
 
-  // 专栏编辑模式
+  // 专栏编辑模式（article=new 表示新建，不走详情加载）
+  const editingArticle = !!articleId && articleId !== 'new';
   useEffect(() => {
-    if (!articleId) return;
+    if (!articleId || articleId === 'new') {
+      if (articleId === 'new') setPhase('article');
+      return;
+    }
     articles.detail(articleId).then((d: any) => {
       const a = d?.article ?? d;
       setArtTitle(a.title || '');
@@ -136,8 +140,8 @@ export default function Upload() {
     setErr('');
     setPhase('hashing');
     try {
-      const buf = await file.arrayBuffer();
-      const h = await sha256Hex(buf);
+      // 流式分块哈希：15GB 文件也不会把整个文件读进内存
+      const h = await sha256File(file, 8 * 1024 * 1024);
       // 秒传检查
       try {
         const ck: any = await upload.checkHash(h);
@@ -166,16 +170,30 @@ export default function Upload() {
         file_hash: h,
       };
 
-      if (directUpload && putUrl) {
-        // 直传模式
-        try {
-          await upload.putToPresigned(putUrl, file, ac.signal);
-          parts = [];
-        } catch (e: any) {
-          if (e?.name === 'AbortError') throw e;
-          // 回退代理
-          await upload.proxyPut(key, file, file.type || 'application/octet-stream');
+      let usedDirect = false;
+      if (directUpload) {
+        // 直传模式：init 可能不给 putUrl，需要先走 presign-single 拿地址
+        let url: string | undefined = putUrl;
+        if (!url) {
+          try {
+            const ps: any = await upload.presignSingle({ filename: file.name, contentType: file.type || 'video/mp4' });
+            url = ps?.putUrl || ps?.url;
+          } catch { /* 拿不到直传地址，尝试分片 */ }
         }
+        if (url) {
+          try {
+            await upload.putToPresigned(url, file, ac.signal);
+            parts = [];
+          } catch (e: any) {
+            if (e?.name === 'AbortError') throw e;
+            // 回退代理
+            await upload.proxyPut(key, file, file.type || 'application/octet-stream');
+          }
+          usedDirect = true;
+        }
+      }
+      if (usedDirect) {
+        // no-op（保持分支结构）
       } else {
         // 分片上传
         const totalParts = Math.ceil(file.size / PART_SIZE);
@@ -334,9 +352,9 @@ export default function Upload() {
       fd.append('content', artContent);
       if (artCover) fd.append('cover', artCover);
       artImages.forEach(f => fd.append('images[]', f));
-      const r: any = articleId ? await articles.edit(articleId, fd) : await articles.create(fd);
-      const id = r?.article?.id ?? r?.id ?? articleId;
-      toast(articleId ? '专栏已更新' : '专栏发布成功', 'success');
+      const r: any = editingArticle ? await articles.edit(articleId!, fd) : await articles.create(fd);
+      const id = r?.article?.id ?? r?.id ?? (editingArticle ? articleId : undefined);
+      toast(editingArticle ? '专栏已更新' : '专栏发布成功', 'success');
       if (id) nav(`/article/${id}`);
     } catch (e: any) {
       setErr(errMsg(e, '发布失败'));
@@ -356,7 +374,7 @@ export default function Upload() {
     return (
       <div className="page fade-in" style={{ maxWidth: 860 }}>
         <h1 className="page-title row" style={{ gap: 8 }}>
-          <I name="newspaper" size={24} /> {articleId ? '编辑专栏' : '发布专栏'}
+          <I name="newspaper" size={24} /> {editingArticle ? '编辑专栏' : '发布专栏'}
         </h1>
         <div className="card col" style={{ padding: 20, gap: 14 }}>
           <Field label="标题">
@@ -388,7 +406,7 @@ export default function Upload() {
           <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
             <Btn variant="text" onClick={() => nav(-1 as any)}>取消</Btn>
             <Btn variant="filled" onClick={publishArticle} disabled={artBusy}>
-              {artBusy ? <Spinner size={16} /> : <I name="send" size={16} />} {articleId ? '保存' : '发布'}
+              {artBusy ? <Spinner size={16} /> : <I name="send" size={16} />} {editingArticle ? '保存' : '发布'}
             </Btn>
           </div>
         </div>
@@ -471,14 +489,20 @@ export default function Upload() {
         </div>
       )}
 
-      {/* 填写信息 */}
-      {(phase === 'meta' || phase === 'hashing' || phase === 'uploading') && file && (
+      {/* 填写信息（编辑模式无需重新选文件） */}
+      {(phase === 'meta' || phase === 'hashing' || phase === 'uploading') && (file || editId) && (
         <div className="card col" style={{ padding: 20, gap: 14 }}>
           <div className="upload-file-meta">
             <span className="uicon"><I name="film" size={24} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="clamp1" style={{ font: 'var(--text-title-sm)' }}>{file.name}</div>
-              <div className="muted small">{fmtBytes(file.size)}{file.type ? ` · ${file.type}` : ''}</div>
+              {file ? (
+                <>
+                  <div className="clamp1" style={{ font: 'var(--text-title-sm)' }}>{file.name}</div>
+                  <div className="muted small">{fmtBytes(file.size)}{file.type ? ` · ${file.type}` : ''}</div>
+                </>
+              ) : (
+                <div className="muted small">编辑现有视频（无需重新上传文件）</div>
+              )}
             </div>
           </div>
 
@@ -529,7 +553,7 @@ export default function Upload() {
               <div className="upload-step active">
                 <span className="step-dot"><Spinner size={14} /></span>
                 <span style={{ font: 'var(--text-label-lg)' }}>正在上传 {Math.round(progress * 100)}%</span>
-                <span className="muted small">{fmtBytes(file.size * progress)} / {fmtBytes(file.size)}</span>
+                <span className="muted small">{file ? `${fmtBytes(file.size * progress)} / ${fmtBytes(file.size)}` : ''}</span>
               </div>
               <Progress value={progress * 100} />
               <div className="row" style={{ justifyContent: 'flex-end' }}>

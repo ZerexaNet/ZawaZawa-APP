@@ -17,9 +17,9 @@ export const auth = {
     http.post('/api/auth/verify-email', { identifier, email, code }, opts),
   // 忘记密码
   forgotSendCode: (email: string, opts: ReqOpts = {}) =>
-    http.post('/api/auth/forgot-password', { email }, opts),
+    http.post('/api/auth/forgot-password/send-code', { email }, opts),
   forgotReset: (b: { email: string; code: string; password: string }) =>
-    http.post('/api/auth/forgot-password/reset', b),
+    http.post('/api/auth/forgot-password', b),
   // 注销账号
   deactivate: (confirmed: boolean, confirmText: string) =>
     http.post('/api/auth/deactivate', { confirmed, confirmText }),
@@ -98,7 +98,7 @@ export const videos = {
     http.post(`/api/videos/${id}/danmaku`, b),
   danmakuXml: (id: string) => http.get(`/api/videos/${id}/danmaku.xml`),
   danmakuImport: (id: string, xml: string) =>
-    http.post(`/api/videos/${id}/danmaku/import`, xml, { form: true }),
+    http.post(`/api/videos/${id}/danmaku/import`, xml, { textType: 'application/xml' }),
   // subtitles
   subtitles: (id: string) => http.get(`/api/videos/${id}/subtitles`),
   subtitleUpload: (id: string, form: FormData) => http.post(`/api/videos/${id}/subtitles`, form, { form: true }),
@@ -110,12 +110,12 @@ export const videos = {
   coverUpdateKey: (id: string, coverKey: string) => http.post(`/api/videos/${id}/cover-update-key`, { cover_key: coverKey }),
   // reupload (替换视频源文件)
   reupload: (id: string, form: FormData) => http.post(`/api/videos/${id}/reupload`, form, { form: true }),
-  // comments
+  // comments（列表/发布按父内容 ID；点赞/删除是扁平路由，仅按评论 ID）
   comments: (id: string, limit = 20, offset = 0) => http.get(`/api/videos/${id}/comments${qs({ limit, offset })}`),
   commentPost: (id: string, content: string, parentId?: string) =>
     http.post(`/api/videos/${id}/comments`, { content, parent_id: parentId }),
-  commentLike: (id: string, commentId: string) => http.post(`/api/videos/${id}/comments/${commentId}/like`),
-  commentDelete: (id: string, commentId: string) => http.delete(`/api/videos/${id}/comments/${commentId}`),
+  commentLike: (commentId: string) => http.post(`/api/comments/${commentId}/like`),
+  commentDelete: (commentId: string) => http.delete(`/api/content-comments/${commentId}`),
   // share / shorten
   shorten: (url: string, targetType: string, targetId: string) =>
     http.post('/api/shorten', { url, target_type: targetType, target_id: targetId }),
@@ -167,8 +167,8 @@ export const articles = {
   comments: (id: string, limit = 20, offset = 0) => http.get(`/api/articles/${id}/comments${qs({ limit, offset })}`),
   commentPost: (id: string, content: string, parentId?: string) =>
     http.post(`/api/articles/${id}/comments`, { content, parent_id: parentId }),
-  commentLike: (id: string, commentId: string) => http.post(`/api/articles/${id}/comments/${commentId}/like`),
-  commentDelete: (id: string, commentId: string) => http.delete(`/api/articles/${id}/comments/${commentId}`),
+  commentLike: (commentId: string) => http.post(`/api/comments/${commentId}/like`),
+  commentDelete: (commentId: string) => http.delete(`/api/content-comments/${commentId}`),
 };
 
 /* ================= Posts (动态) ================= */
@@ -245,7 +245,7 @@ export const messages = {
   tickets: (limit = 20, offset = 0) => http.get(`/api/tickets${qs({ limit, offset })}`),
   ticket: (id: string) => http.get(`/api/tickets/${id}`),
   ticketCreate: (b: { subject: string; content: string }) => http.post('/api/tickets', b),
-  ticketReply: (id: string, form: FormData) => http.post(`/api/tickets/${id}/replies`, form, { form: true }),
+  ticketReply: (id: string, form: FormData) => http.post(`/api/tickets/${id}/reply`, form, { form: true }),
   ticketReopen: (id: string) => http.post(`/api/tickets/${id}/reopen`),
 };
 
@@ -316,7 +316,7 @@ export const admin = {
   ticketClaim: (id: string) => http.post(`/api/admin/tickets/${id}/claim`),
   ticketClose: (id: string, note?: string) => http.post(`/api/admin/tickets/${id}/close`, { note }),
   ticketReopen: (id: string) => http.post(`/api/admin/tickets/${id}/reopen`),
-  ticketReply: (id: string, form: FormData) => http.post(`/api/admin/tickets/${id}/replies`, form, { form: true }),
+  ticketReply: (id: string, form: FormData) => http.post(`/api/admin/tickets/${id}/reply`, form, { form: true }),
   // announcements (admin)
   announcementsAll: (limit = 50) => http.get(`/api/admin/announcements${qs({ limit })}`),
   announcementCreate: (b: { title: string; content: string; is_active?: boolean }) =>

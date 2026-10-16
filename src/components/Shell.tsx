@@ -126,6 +126,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 { label: '观看历史', icon: 'history', onClick: () => nav('/history') },
                 { label: '我的收藏', icon: 'bookmark', onClick: () => nav('/favorites') },
                 { label: '我的合集', icon: 'folder', onClick: () => nav('/collections') },
+                { label: '发动态', icon: 'send', onClick: () => nav('/post-new') },
+                { label: '写专栏', icon: 'newspaper', onClick: () => nav('/upload?article=new') },
                 { label: '会员', icon: 'crown', onClick: () => nav('/membership') },
                 { label: '认证', icon: 'award', onClick: () => nav('/verification') },
                 ...(user.role && ['admin', 'video_moderation', 'content_review'].includes(user.role)

@@ -5,7 +5,7 @@ import { activeCue, parseSubtitles, type Cue } from '../lib/subs';
 import { videos } from '../lib/api';
 import { I } from './icons';
 import { useToast, errMsg } from '../store/toast';
-import { fmtClock } from '../lib/util';
+import { fmtClock, streamFallbacks } from '../lib/util';
 
 interface Props {
   video: Video;
@@ -25,6 +25,7 @@ export function Player({ video, onWatched, danmakuKey = 0 }: Props) {
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [srcIdx, setSrcIdx] = useState(0);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -59,7 +60,17 @@ export function Player({ video, onWatched, danmakuKey = 0 }: Props) {
   const thumbRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
 
-  const src = video.stream_url || video.external_player_url || '';
+  // 多 CDN 容灾链：接口主地址 → R2 → 雨云 S3（逐档切换，全部失败才报错）
+  const sources = useMemo(() => {
+    const base = video.stream_url || video.external_player_url || '';
+    if (!base) return [] as string[];
+    const chain = streamFallbacks(video.stream_url);
+    if (video.external_player_url && video.external_player_url !== base && !chain.includes(video.external_player_url)) {
+      chain.push(video.external_player_url);
+    }
+    return chain;
+  }, [video.stream_url, video.external_player_url]);
+  const src = sources.length ? sources[Math.min(srcIdx, sources.length - 1)] : '';
 
   /* ---------- 引擎初始化 ---------- */
   useEffect(() => {
@@ -333,9 +344,35 @@ export function Player({ video, onWatched, danmakuKey = 0 }: Props) {
     }
   };
 
+  // 换档：优先切下一档 CDN，全部失败才展示错误
+  const onVideoError = useCallback(() => {
+    setSrcIdx(i => {
+      if (i < sources.length - 1) {
+        setError(null);
+        return i + 1;
+      }
+      setError('视频加载失败，已尝试全部 CDN 节点，请检查网络');
+      return i;
+    });
+  }, [sources.length]);
+
+  // 10 秒内完全没收到数据就换下一档 CDN（防节点不可达时 <video> 卡死不触发 onError）
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !src) return;
+    const timer = window.setTimeout(() => {
+      if (v.readyState < 1) onVideoError();
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [src, onVideoError]);
+
+  // 视频切换时重置容灾档位
+  useEffect(() => { setSrcIdx(0); setError(null); }, [video.id]);
+
   const retry = () => {
     setError(null);
     setRetrying(true);
+    setSrcIdx(0);
     const v = videoRef.current;
     if (v) { v.load(); v.play().catch(() => { }); setTimeout(() => setRetrying(false), 1500); }
   };
@@ -364,7 +401,7 @@ export function Player({ video, onWatched, danmakuKey = 0 }: Props) {
         onEnded={() => setPlaying(false)}
         onClick={e => { e.stopPropagation(); togglePlay(); }}
         onDoubleClick={e => { e.stopPropagation(); toggleFullscreen(); }}
-        onError={() => { if (src) setError('视频加载失败，请重试或检查网络'); }}
+        onError={() => { if (src) onVideoError(); }}
         style={{ cursor: playing ? 'none' : 'auto' }}
       />
       <canvas ref={canvasRef} className="dm-canvas" />

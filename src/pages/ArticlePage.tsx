@@ -51,8 +51,8 @@ export default function ArticlePage() {
   const handlers = useMemo(() => ({
     list: (l: number, o: number) => articles.comments(id!, l, o),
     post: (c: string, p?: string) => articles.commentPost(id!, c, p),
-    like: (cid: string) => articles.commentLike(id!, cid),
-    remove: (cid: string) => articles.commentDelete(id!, cid),
+    like: (cid: string) => articles.commentLike(cid),
+    remove: (cid: string) => articles.commentDelete(cid),
   }), [id]);
 
   const canDelete = useCallback((c: Comment) => {

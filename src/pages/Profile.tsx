@@ -136,7 +136,10 @@ export default function Profile() {
         </div>
         <div className="col" style={{ gap: 8 }}>
           <Btn variant="filled" size="sm" onClick={() => nav('/upload')}><I name="upload" size={15} /> 发布视频</Btn>
-          <Btn variant="tonal" size="sm" onClick={() => nav('/upload?article=new')}><I name="newspaper" size={15} /> 写专栏</Btn>
+          <div className="row" style={{ gap: 8 }}>
+            <Btn variant="tonal" size="sm" onClick={() => nav('/upload?article=new')}><I name="newspaper" size={15} /> 写专栏</Btn>
+            <Btn variant="tonal" size="sm" onClick={() => nav('/post-new')}><I name="send" size={15} /> 发动态</Btn>
+          </div>
         </div>
       </div>
 
@@ -192,59 +195,57 @@ export default function Profile() {
 
       <Tabs tabs={tabs} value={tab} onChange={k => setTab(k as TabKey)} />
 
-      {items.length === 0 && !inf.loading ? <Empty icon={tab === 'videos' ? 'film' : tab === 'articles' ? 'newspaper' : 'message'} title="还没有内容" desc={tab === 'videos' ? '发布你的第一个视频吧' : ''} /> : (
-        <>
-          {tab === 'videos' && (
-            <div className="video-grid">
-              {(items as Video[]).map(v => (
-                <div key={v.id} style={{ position: 'relative' }}>
-                  <VideoCard v={v} />
-                  <div className="row" style={{ position: 'absolute', top: 8, right: 8, gap: 4, zIndex: 2 }}>
-                    <button className="icon-btn icon-btn--sm" style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }} title="编辑" onClick={e => { e.preventDefault(); nav(`/upload?edit=${v.id}`); }}><I name="edit" size={15} /></button>
-                    <button className="icon-btn icon-btn--sm" style={{ background: 'rgba(0,0,0,0.55)', color: 'var(--md-error)' }} title="删除" onClick={e => { e.preventDefault(); delVideo(v); }}><I name="trash" size={15} /></button>
-                  </div>
-                </div>
-              ))}
+      {tab === 'videos' && items.length > 0 && (
+        <div className="video-grid">
+          {(items as Video[]).map(v => (
+            <div key={v.id} style={{ position: 'relative' }}>
+              <VideoCard v={v} />
+              <div className="row" style={{ position: 'absolute', top: 8, right: 8, gap: 4, zIndex: 2 }}>
+                <button className="icon-btn icon-btn--sm" style={{ background: 'rgba(0,0,0,0.55)', color: '#fff' }} title="编辑" onClick={e => { e.preventDefault(); nav(`/upload?edit=${v.id}`); }}><I name="edit" size={15} /></button>
+                <button className="icon-btn icon-btn--sm" style={{ background: 'rgba(0,0,0,0.55)', color: 'var(--md-error)' }} title="删除" onClick={e => { e.preventDefault(); delVideo(v); }}><I name="trash" size={15} /></button>
+              </div>
             </div>
-          )}
-          {tab === 'articles' && (
-            <div className="col" style={{ gap: 10 }}>
-              {(items as Article[]).map(a => (
-                <div key={a.id} className="card row" style={{ padding: 14, gap: 12, alignItems: 'center' }}>
-                  <Link to={`/article/${a.id}`} style={{ flex: 1, minWidth: 0 }}>
-                    <div className="clamp1" style={{ font: 'var(--text-title-md)' }}>{a.title}</div>
-                    <div className="muted small" style={{ marginTop: 4 }}>{fmtNum(a.views)} 阅读 · {timeAgo(a.created_at)}</div>
-                  </Link>
-                  <Btn variant="text" size="sm" onClick={() => nav(`/upload?article=${a.id}`)}><I name="edit" size={14} /> 编辑</Btn>
-                  <Btn variant="danger-text" size="sm" onClick={() => delArticle(a)}><I name="trash" size={14} /> 删除</Btn>
-                </div>
-              ))}
-            </div>
-          )}
-          {tab === 'posts' && (
-            <div className="col" style={{ gap: 10, maxWidth: 640 }}>
-              {(items as Post[]).map(p => (
-                <div key={p.id} className="card" style={{ padding: 16 }}>
-                  <div className="row row--between" style={{ marginBottom: 8 }}>
-                    <span className="muted small">{timeAgo(p.created_at)}</span>
-                    <div className="row" style={{ gap: 4 }}>
-                      <button className="icon-btn icon-btn--sm" title="删除" onClick={() => delPost(p)}><I name="trash" size={15} /></button>
-                    </div>
-                  </div>
-                  <div className="clamp3" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{p.content || p.text}</div>
-                  {p.image_urls && p.image_urls.length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 6, marginTop: 8 }}>
-                      {p.image_urls.slice(0, 4).map((u, i) => <img key={i} src={u} loading="lazy" style={{ borderRadius: 8, aspectRatio: '1', objectFit: 'cover' }} alt="" />)}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-          {inf.sentinelEl}
-          {inf.loading && <Loading text="加载更多…" />}
-        </>
+          ))}
+        </div>
       )}
+      {tab === 'articles' && items.length > 0 && (
+        <div className="col" style={{ gap: 10 }}>
+          {(items as Article[]).map(a => (
+            <div key={a.id} className="card row" style={{ padding: 14, gap: 12, alignItems: 'center' }}>
+              <Link to={`/article/${a.id}`} style={{ flex: 1, minWidth: 0 }}>
+                <div className="clamp1" style={{ font: 'var(--text-title-md)' }}>{a.title}</div>
+                <div className="muted small" style={{ marginTop: 4 }}>{fmtNum(a.views)} 阅读 · {timeAgo(a.created_at)}</div>
+              </Link>
+              <Btn variant="text" size="sm" onClick={() => nav(`/upload?article=${a.id}`)}><I name="edit" size={14} /> 编辑</Btn>
+              <Btn variant="danger-text" size="sm" onClick={() => delArticle(a)}><I name="trash" size={14} /> 删除</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === 'posts' && items.length > 0 && (
+        <div className="col" style={{ gap: 10, maxWidth: 640 }}>
+          {(items as Post[]).map(p => (
+            <div key={p.id} className="card" style={{ padding: 16 }}>
+              <div className="row row--between" style={{ marginBottom: 8 }}>
+                <span className="muted small">{timeAgo(p.created_at)}</span>
+                <div className="row" style={{ gap: 4 }}>
+                  <button className="icon-btn icon-btn--sm" title="删除" onClick={() => delPost(p)}><I name="trash" size={15} /></button>
+                </div>
+              </div>
+              <div className="clamp3" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{p.content || p.text}</div>
+              {p.image_urls && p.image_urls.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 6, marginTop: 8 }}>
+                  {p.image_urls.slice(0, 4).map((u, i) => <img key={i} src={u} loading="lazy" style={{ borderRadius: 8, aspectRatio: '1', objectFit: 'cover' }} alt="" />)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {items.length === 0 && !inf.loading && <Empty icon={tab === 'videos' ? 'film' : tab === 'articles' ? 'newspaper' : 'message'} title="还没有内容" desc={tab === 'videos' ? '发布你的第一个视频吧' : ''} />}
+      {/* sentinel 必须常驻：空态分支若卸载它，IntersectionObserver 永不触发首次加载 */}
+      {inf.sentinelEl}
+      {inf.loading && <Loading text="加载更多…" />}
     </div>
   );
 }
